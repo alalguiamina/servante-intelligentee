@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: servante_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./servante-backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/servante_db
+      NODE_ENV: development
+      PORT: "3000"
+      FRONTEND_URL: http://localhost:5174
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: "8000"
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen2.5:0.5b
+      ARDUINO_PORT: COM3
+    ports:
+      - "5001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./servante-backend:/app
+      - /app/node_modules
+    privileged: true
+    command: npm run dev
+
+  frontend:
+    build:
+      context: "./servante-frontend"
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_URL: http://localhost:5001/api
+    ports:
+      - "5174:5173"
+    volumes:
+      - "./servante-frontend:/app"
+      - /app/node_modules
+    depends_on:
+      - backend
+    command: npm run dev
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    environment:
+      CHROMA_SERVER_CORS_ALLOW_ORIGINS: "*"
+    volumes:
+      - chromadb_data:/chroma/data
+
+  mongodb:
+    image: mongo:latest
+    profiles: ["optional"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: admin123
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["optional"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+
+volumes:
+  postgres_data:
+  chromadb_data:
+  mongodb_data:
+  ollama_data:

@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Category {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  tools     Tool[]
+}
+
+model Tool {
+  id                String   @id @default(uuid())
+  name              String
+  categoryId        String
+  imageUrl          String
+  size              String?
+  drawer            String?
+  totalQuantity     Int      @default(1)
+  availableQuantity Int      @default(1)
+  borrowedQuantity  Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  category          Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  borrows           Borrow[]
+}
+
+model User {
+  id        String   @id @default(uuid())
+  badgeId   String   @unique
+  fullName  String
+  email     String   @unique
+  password  String?
+  role      Role     @default(STUDENT)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  borrows   Borrow[]
+}
+
+model Borrow {
+  id         String   @id @default(uuid())
+  userId     String
+  toolId     String
+  borrowDate DateTime @default(now())
+  dueDate    DateTime
+  returnDate DateTime?
+  status     BorrowStatus @default(ACTIVE)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+  tool Tool @relation(fields: [toolId], references: [id])
+}
+
+enum Role {
+  STUDENT
+  PROFESSOR
+  TECHNICIAN
+  ADMIN
+}
+
+enum BorrowStatus {
+  ACTIVE
+  RETURNED
+  OVERDUE
+}
+
+model RFIDAttempt {
+  id          String   @id @default(uuid())
+  uid         String
+  ipAddress   String
+  success     Boolean
+  userId      String?
+  timestamp   DateTime @default(now())
+  
+  @@index([uid, timestamp])
+  @@index([ipAddress, timestamp])
+}
