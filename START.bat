@@ -16,7 +16,8 @@ echo       Done.
 echo.
 
 REM ─── 2. Start infra services ────────────────────────────────
-echo [2/7] Starting PostgreSQL + ChromaDB + Ollama (Docker)...
+echo [2/7] Starting PostgreSQL + ChromaDB (Docker)...
+echo       Ollama is optional and can be started later if needed.
 docker-compose -f docker-compose.infra.yml up -d
 if %errorlevel% neq 0 (
     echo.
@@ -88,9 +89,9 @@ echo   SERVICE          URL
 echo ============================================================
 echo   Frontend       http://localhost:5174
 echo   Backend API    http://localhost:5001/api
-echo   PostgreSQL     localhost:5433
+echo   PostgreSQL     localhost:5434
 echo   ChromaDB       http://localhost:8001
-echo   Ollama         http://localhost:11434
+echo   Ollama         optional (run: docker compose -f docker-compose.infra.yml --profile optional up -d ollama)
 echo   Arduino        COM3 (serial bridge running)
 echo ============================================================
 echo.
