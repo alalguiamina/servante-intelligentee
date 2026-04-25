@@ -1,4 +1,5 @@
 # Infrastructure services only — backend/frontend run natively so COM3 (Arduino) is accessible
+# Ollama is optional because the backend continues to run without it.
 services:
   postgres:
     image: postgres:16-alpine
@@ -7,11 +8,11 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: servante_db
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -27,6 +28,7 @@ services:
 
   ollama:
     image: ollama/ollama:latest
+    profiles: [ "optional" ]
     ports:
       - "11434:11434"
     volumes:
