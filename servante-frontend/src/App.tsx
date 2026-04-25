@@ -83,11 +83,12 @@ import UserSettings from './components/UserSettings';
 import AdminSettings from './components/AdminSettings';
 import BadgeScanner from './components/BadgeScanner';
 import ReturnTool from './components/ReturnTool';
+import ProductValidation from './components/ProductValidation';
 
 // ============================================
 // IMPORTS - API Backend
 // ============================================
-import { authAPI, toolsAPI, borrowsAPI, usersAPI, uploadAPI, categoriesAPI, hardwareAPI } from './services/api';
+import { authAPI, toolsAPI, borrowsAPI, usersAPI, uploadAPI, categoriesAPI, hardwareAPI, API_BASE_URL } from './services/api';
 import { useEffect } from 'react';
 
 // ============================================
@@ -140,6 +141,19 @@ type User = {
   createdAt?: Date;
 };
 
+type DetectedTool = {
+  class_name: string;
+  tool_name: string;
+  confidence: number;
+};
+
+type DrawerScanResult = {
+  success: boolean;
+  detected_tools: DetectedTool[];
+  count: number;
+  error?: string;
+};
+
 type ModalMode = 'create' | 'edit' | 'delete';
 
 type AdminFilter = {
@@ -166,6 +180,7 @@ type Screen =
   | 'tool-selection'
   | 'confirm-borrow'
   | 'drawer-open'
+  | 'product-validation'
   | 'admin-login'
   | 'user-login'
   | 'admin-dashboard'
@@ -209,10 +224,40 @@ const toolNameToKeyMap: Record<string, string> = {
   'Pointeau Automatique': 'tool.pointeauAutomatique',
   'Ciseaux': 'tool.ciseaux',
   'Cutteur': 'tool.cutteur',
+  // New tools
+  'PINCE A DENUDER': 'tool.pinceADenuder',
+  'Pince à bec plat': 'tool.pinceBecPlat',
+  'Mini pince à bec ROND': 'tool.miniPinceBecRond',
+  'DENUDEUR AUTOMATIQUE': 'tool.denudeurAutomatique',
+  'Pince COUPANTE': 'tool.pinceCoupante',
+  'PINCE UNIVERSELLE': 'tool.pinceUniverselle',
+  'PINCE A BEC COUDE': 'tool.pinceABecCoude',
+  'Clé L grande': 'tool.cleLGrande',
+  'Clé L petite': 'tool.cleLPetite',
+  'Lot de clés plates': 'tool.lotClesPlates',
+  'PERCEUSE': 'tool.perceuse',
+  'PIED A COULISSE': 'tool.piedACoulisse',
+  'MULTIMETRE': 'tool.multimetre',
+  // Database exact matches (lowercase from seed)
+  'Mini pince à bec demi-rond coudé': 'tool.miniPinceBecDemiRondCoude',
+  'Mini pince à bec plat': 'tool.miniPinceBecPlat',
 };
 
 const getToolTranslationKey = (toolName: string): string => {
-  return toolNameToKeyMap[toolName] || `tool.${toolName.toLowerCase().replace(/\s+/g, '')}`;
+  // First try exact match
+  if (toolNameToKeyMap[toolName]) {
+    return toolNameToKeyMap[toolName];
+  }
+
+  // Try case-insensitive match
+  for (const [key, value] of Object.entries(toolNameToKeyMap)) {
+    if (key.toLowerCase() === toolName.toLowerCase()) {
+      return value;
+    }
+  }
+
+  // Fallback: auto-generate key
+  return `tool.${toolName.toLowerCase().replace(/\s+/g, '')}`;
 };
 
 // ============================================
@@ -228,6 +273,20 @@ const categoryToKeyMap: Record<string, string> = {
 
 const getCategoryTranslationKey = (category: string): string => {
   return categoryToKeyMap[category] || category;
+};
+
+// Drawer letter to number mapping
+const drawerLetterToNumber: Record<string, number> = {
+  'x': 1,
+  'y': 2,
+  'z': 3,
+  'a': 4,
+};
+
+const getDrawerNumber = (drawerLetter: string): number => {
+  const num = parseInt(drawerLetter);
+  if (!isNaN(num)) return num;
+  return drawerLetterToNumber[drawerLetter?.toLowerCase()] || 1;
 };
 
 // ============================================
@@ -920,7 +979,7 @@ const AdminBorrowsTable: React.FC<{
                   <td className="px-4 py-3 text-sm text-slate-900 font-medium">{getTranslatedToolName(borrow.toolName)}</td>
                   <td className="px-4 py-3 text-center">
                     <span className="px-2 py-1 bg-slate-100 rounded-lg text-xs font-semibold">
-                      {borrow.drawer}
+                      {getDrawerNumber(borrow.drawer)}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-center text-sm text-slate-600">
@@ -1078,6 +1137,83 @@ export default function App() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [badgeScannerOpen, setBadgeScannerOpen] = useState(false);
   const [scannedBadgeId, setScannedBadgeId] = useState<string>('');
+
+  // ✅ États pour la validation produit IA
+  const [activeBorrowId, setActiveBorrowId] = useState<string | null>(null);
+  const [validationRequired, setValidationRequired] = useState(false);
+
+  // États pour le scan YOLO du tiroir
+  const [drawerScanResult, setDrawerScanResult] = useState<DrawerScanResult | null>(null);
+  const [isScanningDrawer, setIsScanningDrawer] = useState(false);
+  const [cameraFrameTs, setCameraFrameTs] = useState(0);
+  const [liveDetections, setLiveDetections] = useState<DetectedTool[]>([]);
+  const [scanSecondsLeft, setScanSecondsLeft] = useState(0);
+
+  // État pour l'aperçu caméra (avant le scan YOLO)
+  const [previewTs, setPreviewTs] = useState(0);
+  const [previewReady, setPreviewReady] = useState(false);
+  // Ref pour savoir si on était déjà sur un écran avec preview (évite de recharger le modèle)
+  const previewActiveRef = React.useRef(false);
+
+  const SCAN_DURATION = 32; // secondes affichées (≈ 12 s chargement modèle + 20 s détection)
+
+  // Démarrer/arrêter l'aperçu caméra selon l'écran courant
+  useEffect(() => {
+    const needsPreview = currentScreen === 'confirm-borrow' || currentScreen === 'drawer-open';
+
+    if (!needsPreview) {
+      // On quitte les écrans preview → arrêter si on était actif
+      if (previewActiveRef.current) {
+        previewActiveRef.current = false;
+        hardwareAPI.stopPreview().catch(() => {});
+      }
+      setPreviewTs(0);
+      setPreviewReady(false);
+      return;
+    }
+
+    if (!previewActiveRef.current) {
+      // Première entrée dans un écran preview → démarrer le processus YOLO
+      previewActiveRef.current = true;
+      hardwareAPI.startPreview(0, 600).catch(() => {});
+    }
+    // Sinon : transition entre confirm-borrow et drawer-open → garder le même process (YOLO déjà chargé)
+
+    const interval = setInterval(() => setPreviewTs(Date.now()), 200);
+
+    // Cleanup : arrêter le polling mais PAS le process Python (géré ci-dessus)
+    return () => clearInterval(interval);
+  }, [currentScreen]);
+
+  // Poll live camera frame + detections every 150 ms while scanning
+  useEffect(() => {
+    if (!isScanningDrawer) { setLiveDetections([]); setScanSecondsLeft(0); return; }
+
+    setScanSecondsLeft(SCAN_DURATION);
+    const startTime = Date.now();
+
+    const interval = setInterval(async () => {
+      // Compteur
+      const elapsed = (Date.now() - startTime) / 1000;
+      setScanSecondsLeft(Math.max(0, Math.ceil(SCAN_DURATION - elapsed)));
+
+      // Frame live
+      setCameraFrameTs(Date.now());
+
+      // Détections live
+      try {
+        const res = await fetch(
+          `${API_BASE_URL.replace('/api', '')}/api/hardware/camera/detections?t=${Date.now()}`,
+          { cache: 'no-store' }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.detected_tools)) setLiveDetections(data.detected_tools);
+        }
+      } catch { /* backend not ready yet */ }
+    }, 150);
+    return () => clearInterval(interval);
+  }, [isScanningDrawer]);
 
   // États pour la gestion des outils
   const [selectedToolForEdit, setSelectedToolForEdit] = useState<Tool | null>(null);
@@ -1396,25 +1532,17 @@ export default function App() {
 
       if (response.success) {
         // Adapter les données du backend au format frontend
-        const adaptedTools = response.data.map((tool: any) => {
-          // Recalculate available/borrowed based on actual allBorrows to ensure consistency
-          const toolActiveBorrows = allBorrows.filter(b =>
-            b.toolId === tool.id && (b.status === 'active' || b.status === 'overdue')
-          ).length;
-          const calculatedAvailable = Math.max(0, tool.totalQuantity - toolActiveBorrows);
-
-          return {
-            id: tool.id,
-            name: tool.name,
-            category: tool.category?.name || tool.category,
-            image: tool.imageUrl,
-            totalQuantity: tool.totalQuantity,
-            availableQuantity: calculatedAvailable,
-            borrowedQuantity: toolActiveBorrows,
-            size: tool.size || 'Moyen',
-            drawer: tool.drawer
-          };
-        });
+        const adaptedTools = response.data.map((tool: any) => ({
+          id: tool.id,
+          name: tool.name,
+          category: tool.category?.name || tool.category,
+          image: tool.imageUrl,
+          totalQuantity: tool.totalQuantity,
+          availableQuantity: tool.availableQuantity || 0,
+          borrowedQuantity: tool.borrowedQuantity || 0,
+          size: tool.size || 'Moyen',
+          drawer: tool.drawer
+        }));
 
         setTools(adaptedTools);
         console.log('✅ Outils chargés depuis le backend:', adaptedTools.length);
@@ -1574,7 +1702,7 @@ export default function App() {
       [t('exportTool')]: t(getToolTranslationKey(tool.name)),
       [t('exportCategory')]: t(getCategoryTranslationKey(tool.category)),
       [t('exportSize')]: tool.size || '-',
-      [t('exportDrawer')]: tool.drawer || '-',
+      [t('exportDrawer')]: tool.drawer ? getDrawerNumber(tool.drawer) : '-',
       [t('exportTotalQuantity')]: tool.totalQuantity,
       [t('exportAvailable')]: tool.availableQuantity,
       [t('exportBorrowed')]: tool.borrowedQuantity,
@@ -2085,7 +2213,7 @@ export default function App() {
                         {tool.drawer && (
                           <span className="px-2 py-1 bg-slate-100 rounded-lg font-semibold flex items-center gap-1">
                             <Box className="w-3 h-3" />
-                            {tool.drawer}
+                            {getDrawerNumber(tool.drawer)}
                           </span>
                         )}
                       </div>
@@ -2128,7 +2256,7 @@ export default function App() {
                       {tool.drawer && (
                         <span className="px-3 py-1 bg-slate-100 rounded-lg font-semibold flex items-center gap-1">
                           <Box className="w-4 h-4" />
-                          {t('drawer')}: {tool.drawer}
+                          {t('drawer')}: {getDrawerNumber(tool.drawer)}
                         </span>
                       )}
                     </div>
@@ -2360,7 +2488,7 @@ export default function App() {
                       {selectedTool.drawer && (
                         <span className="px-3 py-1 bg-white rounded-lg font-semibold border border-slate-200 flex items-center gap-1">
                           <Box className="w-4 h-4" />
-                          {t('drawer')}: {selectedTool.drawer}
+                          {t('drawer')}: {getDrawerNumber(selectedTool.drawer)}
                         </span>
                       )}
                     </div>
@@ -2368,7 +2496,39 @@ export default function App() {
                 </div>
               )}
 
-              <div className="mt-8 flex gap-4">
+              {/* Aperçu caméra en direct */}
+              <div className="mt-5 rounded-xl overflow-hidden border-2 border-slate-700 bg-slate-900">
+                <div className="flex items-center justify-between px-4 py-2 bg-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${previewReady ? 'bg-green-400' : 'bg-yellow-400'}`} />
+                    <span className="text-white text-sm font-semibold">
+                      {previewReady ? 'LIVE — Détection YOLO' : 'Chargement du modèle…'}
+                    </span>
+                  </div>
+                  <span className="text-slate-400 text-xs">EasyCamera 5M</span>
+                </div>
+                <div className="relative bg-black" style={{ minHeight: '180px' }}>
+                  {/* Spinner overlay until first frame loads */}
+                  {!previewReady && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-400" />
+                      <span className="text-slate-400 text-xs">best (2).pt — chargement modèle…</span>
+                    </div>
+                  )}
+                  {/* Camera image — always in DOM once previewTs > 0, opacity-0 until loaded */}
+                  {previewTs > 0 && (
+                    <img
+                      src={`${API_BASE_URL.replace('/api', '')}/api/hardware/camera/preview?t=${previewTs}`}
+                      alt="Aperçu caméra"
+                      className="w-full object-contain"
+                      style={{ maxHeight: '260px', opacity: previewReady ? 1 : 0, transition: 'opacity 0.3s' }}
+                      onLoad={() => setPreviewReady(true)}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 flex gap-4">
                 <button
                   onClick={() => {
                     setSelectedTool(null);
@@ -2418,35 +2578,75 @@ export default function App() {
     const handleCloseDrawer = async () => {
       if (!selectedTool.drawer) return;
 
+      // 0. Libérer la caméra : arrêter le preview avant que YOLO ne la prenne
+      previewActiveRef.current = false;
+      await hardwareAPI.stopPreview().catch(() => {});
+
+      // 1. Activer la caméra immédiatement (live feed YOLO visible dès le clic)
+      setIsScanningDrawer(true);
+      setDrawerScanResult(null);
+
+      // 2. Scanner le tiroir ouvert : YOLO tourne, frames annotées en live
+      //    La composition est enregistrée sur le dernier frame (résultat final)
+      let scanData: DrawerScanResult = { success: false, detected_tools: [], count: 0, error: 'Scan indisponible' };
+      try {
+        scanData = await hardwareAPI.scanDrawer(0);
+        setDrawerScanResult(scanData);   // ← composition enregistrée ici
+      } catch {
+        setDrawerScanResult(scanData);
+      } finally {
+        setIsScanningDrawer(false);
+      }
+
+      // 3. Fermer le tiroir après le scan
+      try {
+        await hardwareAPI.closeDrawer(selectedTool.drawer as '1' | '2' | '3' | '4');
+      } catch (error) {
+        console.warn('⚠️ Erreur fermeture tiroir:', error);
+      }
+
+      // 4. Montrer les résultats finaux 2 s puis confirmer
+      await new Promise(r => setTimeout(r, 2000));
+
       try {
         setLoading(true);
-        const result = await hardwareAPI.closeDrawer(selectedTool.drawer as '1' | '2' | '3' | '4');
-
-        if (result.success) {
-          showToast(`Tiroir ${selectedTool.drawer} fermé`, 'success', 2000);
-        }
-
-        // If return mode, mark the borrow as returned after closing the drawer
         if (isReturnMode && currentUser) {
           const activeBorrow = allBorrows.find(
             b => b.toolId === selectedTool.id &&
               b.userName === currentUser.fullName &&
               (b.status === 'active' || b.status === 'overdue')
           );
+          if (activeBorrow) await borrowsAPI.markAsReturned(activeBorrow.id);
+          setSelectedTool(null);
+          setIsReturnMode(false);
+          setDrawerScanResult(null);
+          setCurrentScreen('tool-selection');
+        } else {
+          const activeBorrow = allBorrows.find(
+            b => b.toolId === selectedTool.id &&
+              b.userName === currentUser?.fullName &&
+              b.status === 'active'
+          );
           if (activeBorrow) {
-            await borrowsAPI.markAsReturned(activeBorrow.id);
+            setActiveBorrowId(activeBorrow.id);
+            setValidationRequired(true);
+            setDrawerScanResult(null);
+            setCurrentScreen('product-validation');
+          } else {
+            setSelectedTool(null);
+            setDrawerScanResult(null);
+            setCurrentScreen('tool-selection');
           }
         }
       } catch (error) {
-        console.warn('⚠️ Erreur fermeture tiroir:', error);
-        showToast('Erreur lors de la fermeture', 'error', 2000);
+        console.warn('⚠️ Erreur confirmation automatique:', error);
+        setSelectedTool(null);
+        setDrawerScanResult(null);
+        setCurrentScreen('tool-selection');
       } finally {
         setLoading(false);
         await loadBorrowsFromBackend();
         await loadToolsFromBackend();
-        setSelectedTool(null);
-        setIsReturnMode(false);
-        setCurrentScreen('tool-selection');
       }
     };
 
@@ -2484,7 +2684,7 @@ export default function App() {
 
               {/* Titre */}
               <h2 className="text-4xl font-bold text-center text-slate-900 mb-4">
-                {t('drawerIsOpen', { drawer: selectedTool.drawer })}
+                {t('drawerIsOpen', { drawer: getDrawerNumber(selectedTool.drawer) })}
               </h2>
               <p className="text-xl text-center text-slate-600 mb-8">
                 {isReturnMode ? t('pleaseReturnYourTool') : t('pleaseRetrieveYourTool') || 'Please retrieve your tool'}
@@ -2511,7 +2711,7 @@ export default function App() {
                   </div>
                   <div>
                     <h4 className="font-bold text-slate-900 mb-1">{isReturnMode ? t('placeToolInDrawer') : 'Take your tool'}</h4>
-                    <p className="text-sm text-slate-600">{isReturnMode ? t('placeToolInDrawerDesc', { drawer: selectedTool.drawer }) : `Carefully remove the tool from drawer ${selectedTool.drawer}`}</p>
+                    <p className="text-sm text-slate-600">{isReturnMode ? t('placeToolInDrawerDesc', { drawer: getDrawerNumber(selectedTool.drawer) }) : `Carefully remove the tool from drawer ${getDrawerNumber(selectedTool.drawer)}`}</p>
                   </div>
                 </div>
               </div>
@@ -2528,24 +2728,194 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Bouton fermer */}
-              <button
-                onClick={handleCloseDrawer}
-                disabled={loading}
-                className="w-full py-6 rounded-2xl bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white transition-all font-bold text-xl shadow-xl flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                    <span>Closing...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle className="w-6 h-6" />
-                    <span>Close Drawer & Finish</span>
-                  </>
-                )}
-              </button>
+              {/* Aperçu caméra en direct (avant le scan YOLO) */}
+              {!isScanningDrawer && !drawerScanResult && (
+                <div className="w-full rounded-2xl overflow-hidden border-2 border-slate-700 bg-slate-900 mb-4">
+                  <div className="flex items-center justify-between px-4 py-2 bg-slate-800">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${previewReady ? 'bg-green-400' : 'bg-yellow-400'}`} />
+                      <span className="text-white text-sm font-semibold">
+                        {previewReady ? 'LIVE — Détection YOLO' : 'Chargement du modèle…'}
+                      </span>
+                    </div>
+                    <span className="text-slate-400 text-xs">Tiroir {getDrawerNumber(selectedTool.drawer || '')}</span>
+                  </div>
+                  <div className="relative bg-black" style={{ minHeight: '200px' }}>
+                    {/* Spinner overlay until first frame loads */}
+                    {!previewReady && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-400" />
+                        <span className="text-slate-400 text-xs">best (2).pt — chargement modèle…</span>
+                      </div>
+                    )}
+                    {/* Camera image — opacity-0 until loaded, then fades in */}
+                    {previewTs > 0 && (
+                      <img
+                        src={`${API_BASE_URL.replace('/api', '')}/api/hardware/camera/preview?t=${previewTs}`}
+                        alt="Aperçu caméra"
+                        className="w-full object-contain"
+                        style={{ maxHeight: '280px', opacity: previewReady ? 1 : 0, transition: 'opacity 0.3s' }}
+                        onLoad={() => setPreviewReady(true)}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Bouton fermer / scan / résultats */}
+              {!isScanningDrawer && !drawerScanResult && (
+                <button
+                  onClick={handleCloseDrawer}
+                  disabled={loading}
+                  className="w-full py-6 rounded-2xl bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white transition-all font-bold text-xl shadow-xl flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                      <span>Fermeture...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-6 h-6" />
+                      <span>Close Drawer & Finish</span>
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Scan en cours : caméra live + détections en temps réel */}
+              {isScanningDrawer && (
+                <div className="w-full rounded-2xl overflow-hidden border-2 border-blue-400 bg-slate-900">
+
+                  {/* Barre de statut */}
+                  <div className={`flex items-center justify-between px-4 py-2 ${cameraFrameTs > 0 ? 'bg-blue-600' : 'bg-slate-700'}`}>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${cameraFrameTs > 0 ? 'bg-red-400' : 'bg-yellow-400'}`} />
+                      <span className="text-white text-sm font-bold">
+                        {cameraFrameTs > 0 ? 'LIVE — Détection en cours' : 'Chargement du modèle…'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {liveDetections.length > 0 && (
+                        <span className="bg-green-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                          {liveDetections.length} détecté{liveDetections.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                      <span className="text-white text-xs font-mono bg-black/30 px-2 py-0.5 rounded">
+                        {scanSecondsLeft}s
+                      </span>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                    </div>
+                  </div>
+
+                  {/* Flux caméra */}
+                  {cameraFrameTs > 0 ? (
+                    <img
+                      src={`${API_BASE_URL.replace('/api', '')}/api/hardware/camera/frame?t=${cameraFrameTs}`}
+                      alt="Flux caméra"
+                      className="w-full object-contain bg-black"
+                      style={{ maxHeight: '300px' }}
+                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  ) : (
+                    <div className="w-full h-40 flex flex-col items-center justify-center gap-3 text-slate-400">
+                      <div className="animate-spin rounded-full h-10 w-10 border-4 border-yellow-400 border-t-transparent" />
+                      <span className="text-sm">Chargement du modèle YOLO (best (2).pt)…</span>
+                      <span className="text-xs text-slate-500">La caméra démarrera automatiquement</span>
+                    </div>
+                  )}
+
+                  {/* Outils détectés en temps réel */}
+                  {liveDetections.length > 0 && (
+                    <div className="border-t border-slate-700">
+                      <div className="px-4 py-2 bg-slate-800 text-xs text-slate-400 font-semibold uppercase tracking-wide">
+                        Outils détectés
+                      </div>
+                      <div className="divide-y divide-slate-800 max-h-48 overflow-y-auto">
+                        {liveDetections.map((tool, idx) => (
+                          <div key={tool.tool_name} className="flex items-center justify-between px-4 py-2 bg-slate-900">
+                            <div className="flex items-center gap-3">
+                              <span className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                                {idx + 1}
+                              </span>
+                              <div>
+                                <p className="text-white text-sm font-semibold">{tool.tool_name}</p>
+                                <p className="text-slate-500 text-xs">{tool.class_name}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <div className="w-20 h-1.5 rounded-full bg-slate-700">
+                                <div
+                                  className="h-1.5 rounded-full bg-green-400 transition-all duration-300"
+                                  style={{ width: `${Math.round(tool.confidence * 100)}%` }}
+                                />
+                              </div>
+                              <span className="text-green-400 text-xs font-bold w-9 text-right">
+                                {Math.round(tool.confidence * 100)}%
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* État : résultats du scan */}
+              {drawerScanResult && !isScanningDrawer && (
+                <div className="w-full rounded-2xl border-2 border-slate-200 overflow-hidden">
+                  <div className="bg-slate-800 px-6 py-4 flex items-center gap-3">
+                    <Activity className="w-5 h-5 text-green-400" />
+                    <h3 className="text-white font-bold text-lg">Composition du tiroir détectée</h3>
+                    <span className="ml-auto bg-green-500 text-white text-xs font-bold px-3 py-1 rounded-full">
+                      {drawerScanResult.count} outil{drawerScanResult.count !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+
+                  {!drawerScanResult.success || drawerScanResult.error ? (
+                    <div className="p-6 bg-red-50 text-red-700 text-sm">
+                      {drawerScanResult.error || 'Scan indisponible'}
+                    </div>
+                  ) : drawerScanResult.count === 0 ? (
+                    <div className="p-6 bg-yellow-50 text-yellow-700 text-sm text-center">
+                      Aucun outil détecté dans le tiroir
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {drawerScanResult.detected_tools.map((tool, idx) => (
+                        <div key={idx} className="flex items-center justify-between px-6 py-3 bg-white hover:bg-slate-50">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-sm">
+                              {idx + 1}
+                            </div>
+                            <div>
+                              <p className="font-semibold text-slate-800">{tool.tool_name}</p>
+                              <p className="text-xs text-slate-400">{tool.class_name}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 h-2 rounded-full bg-slate-200">
+                              <div
+                                className="h-2 rounded-full bg-green-500"
+                                style={{ width: `${Math.round(tool.confidence * 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs font-bold text-slate-600 w-10 text-right">
+                              {Math.round(tool.confidence * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="px-6 py-3 bg-slate-50 flex items-center justify-center gap-2 text-slate-500 text-sm">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-slate-400" />
+                    Confirmation automatique en cours...
+                  </div>
+                </div>
+              )}
 
               {/* Note de sécurité */}
               <div className="mt-6 text-center text-sm text-slate-500 flex items-center justify-center gap-2">
@@ -2783,7 +3153,7 @@ export default function App() {
                           <h4 className="font-bold text-slate-900">{getTranslatedToolName(borrow.toolName)}</h4>
                           <p className="text-sm text-slate-600">
                             {t('borrowed')}: {new Date(borrow.borrowDate).toLocaleDateString('fr-FR')} -
-                            {t('drawer')} {borrow.drawer}
+                            {t('drawer')} {getDrawerNumber(borrow.drawer)}
                           </p>
                           {borrow.status === 'overdue' && (
                             <p className="text-sm font-bold text-red-600">
@@ -3956,7 +4326,7 @@ export default function App() {
                     'Avg Duration (days)': tool.avgBorrowDays,
                     'Usage Rate %': `${tool.usageRate}%`,
                     'Popularity %': `${tool.popularityScore}%`,
-                    [t('drawer')]: tool.drawer || '-',
+                    [t('drawer')]: tool.drawer ? getDrawerNumber(tool.drawer) : '-',
                     [t('size')]: tool.size || '-'
                   }));
 
@@ -3997,7 +4367,7 @@ export default function App() {
                           </div>
                           <div>
                             <p className="text-sm font-bold text-slate-900">{t(getToolTranslationKey(tool.name))}</p>
-                            <p className="text-xs text-slate-500">{tool.drawer ? `${t('drawer')} ${tool.drawer}` : '-'}</p>
+                            <p className="text-xs text-slate-500">{tool.drawer ? `${t('drawer')} ${getDrawerNumber(tool.drawer)}` : '-'}</p>
                           </div>
                         </div>
                       </td>
@@ -4243,6 +4613,44 @@ export default function App() {
       </div>
     );
   }
+
+  // ============================================
+  // ÉCRAN - VALIDATION PRODUIT IA
+  // ============================================
+  if (currentScreen === 'product-validation' && activeBorrowId && selectedTool) {
+    return (
+      <ProductValidation
+        toolName={selectedTool.name}
+        borrowId={activeBorrowId}
+        onValidationSuccess={() => {
+          showToast('✅ Produit validé! Emprunt confirmé', 'success', 3000);
+          setSelectedTool(null);
+          setActiveBorrowId(null);
+          setValidationRequired(false);
+          setCurrentScreen('tool-selection');
+          loadBorrowsFromBackend();
+          loadToolsFromBackend();
+        }}
+        onValidationFailure={(reason) => {
+          showToast(`❌ ${reason}`, 'error', 3000);
+          setSelectedTool(null);
+          setActiveBorrowId(null);
+          setValidationRequired(false);
+          setCurrentScreen('tool-selection');
+          loadBorrowsFromBackend();
+          loadToolsFromBackend();
+        }}
+        onSkip={() => {
+          showToast('Validation ignorée', 'info', 2000);
+          setSelectedTool(null);
+          setActiveBorrowId(null);
+          setValidationRequired(false);
+          setCurrentScreen('tool-selection');
+        }}
+      />
+    );
+  }
+
   if (currentScreen === 'return-tool') {
     return (
       <ReturnTool
@@ -4961,7 +5369,7 @@ export default function App() {
                         </td>
                         <td className="px-6 py-4 text-center">
                           <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm font-semibold">
-                            {tool.drawer}
+                            {getDrawerNumber(tool.drawer)}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-center">

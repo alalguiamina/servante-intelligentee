@@ -164,8 +164,12 @@ export const sendAck = (req: Request, res: Response): void => {
 // ROUTE SETUP
 // ============================================
 import express from 'express';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { startBadgeScan, checkBadgeScan, cancelBadgeScan, receiveRFIDWithScan } from '../controllers/badgeScanController';
 import { openDrawer, closeDrawer, stopMotors, getMotorStatus } from '../controllers/motorController';
+import { aiValidationService } from '../services/aiValidationService';
 
 const router = express.Router();
 
@@ -186,5 +190,72 @@ router.post('/drawer/open', openDrawer);
 router.post('/drawer/close', closeDrawer);
 router.post('/motor/stop', stopMotors);
 router.get('/motor/status', getMotorStatus);
+
+// Camera preview endpoints (lightweight, no YOLO — used on confirm & drawer-open screens)
+router.post('/camera/preview/start', (req: Request, res: Response) => {
+  const { cameraId = 0, duration = 600 } = req.body;
+  aiValidationService.startPreview(Number(cameraId), Number(duration));
+  res.json({ success: true });
+});
+
+router.post('/camera/preview/stop', (req: Request, res: Response) => {
+  aiValidationService.stopPreview();
+  res.json({ success: true });
+});
+
+router.get('/camera/preview', (req: Request, res: Response) => {
+  const framePath = aiValidationService.previewFramePath;
+  if (!fs.existsSync(framePath)) {
+    res.status(404).json({ error: 'No preview frame available yet' });
+    return;
+  }
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.sendFile(framePath);
+});
+
+// Live camera frame endpoint (polled by frontend while scanning)
+router.get('/camera/frame', (req: Request, res: Response) => {
+  const framePath = path.join(os.tmpdir(), 'servante_live_frame.jpg');
+  if (!fs.existsSync(framePath)) {
+    res.status(404).json({ error: 'No frame available yet' });
+    return;
+  }
+  res.setHeader('Content-Type', 'image/jpeg');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.sendFile(framePath);
+});
+
+// Live detections endpoint (polled by frontend while scanning)
+router.get('/camera/detections', (req: Request, res: Response) => {
+  const detPath = path.join(os.tmpdir(), 'servante_live_detections.json');
+  if (!fs.existsSync(detPath)) {
+    res.json({ detected_tools: [], count: 0 });
+    return;
+  }
+  try {
+    const raw = fs.readFileSync(detPath, 'utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.json(JSON.parse(raw));
+  } catch {
+    res.json({ detected_tools: [], count: 0 });
+  }
+});
+
+// YOLO drawer scan endpoint
+router.post('/drawer/scan', async (req: Request, res: Response) => {
+  try {
+    const { cameraId = 0, confidence = 0.35, duration = 20 } = req.body;
+    const result = await aiValidationService.scanDrawer(
+      Number(cameraId),
+      Number(confidence),
+      Number(duration)
+    );
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message || 'Scan failed' });
+  }
+});
 
 export default router;

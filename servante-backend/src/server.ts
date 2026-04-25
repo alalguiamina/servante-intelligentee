@@ -2,9 +2,13 @@ import express, { Application } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import rfidRoutes from './routes/rfid.js';
 import { rfidService } from './services/rfidService.js';
 import { motorService } from './services/motorService.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Charger les variables d'environnement
 dotenv.config();
@@ -57,6 +61,9 @@ app.use(cors({
 // Parser le body JSON
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from public folder
+app.use(express.static(path.join(__dirname, '../public')));
 
 // Logger les requêtes (en développement)
 if (process.env.NODE_ENV === 'development') {

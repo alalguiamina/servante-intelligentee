@@ -61,6 +61,22 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     'Pointeau Automatique': 'tool.pointeauAutomatique',
     'Ciseaux': 'tool.ciseaux',
     'Cutteur': 'tool.cutteur',
+    'PINCE A DENUDER': 'tool.pinceADenuder',
+    'Pince à bec plat': 'tool.pinceBecPlat',
+    'Mini pince à bec ROND': 'tool.miniPinceBecRond',
+    'DENUDEUR AUTOMATIQUE': 'tool.denudeurAutomatique',
+    'Pince COUPANTE': 'tool.pinceCoupante',
+    'PINCE UNIVERSELLE': 'tool.pinceUniverselle',
+    'PINCE A BEC COUDE': 'tool.pinceABecCoude',
+    'Clé L grande': 'tool.cleLGrande',
+    'Clé L petite': 'tool.cleLPetite',
+    'Lot de clés plates': 'tool.lotClesPlates',
+    'PERCEUSE': 'tool.perceuse',
+    'PIED A COULISSE': 'tool.piedACoulisse',
+    'MULTIMETRE': 'tool.multimetre',
+    // Database exact matches (lowercase from seed)
+    'Mini pince à bec demi-rond coudé': 'tool.miniPinceBecDemiRondCoude',
+    'Mini pince à bec plat': 'tool.miniPinceBecPlat',
   };
 
   const categoryToKeyMap: Record<string, string> = {
@@ -73,8 +89,20 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
 
   // Translate tool name
   const getTranslatedToolName = (toolName: string): string => {
-    const key = toolNameToKeyMap[toolName];
-    return key ? t(key) : toolName;
+    // First try exact match
+    if (toolNameToKeyMap[toolName]) {
+      return t(toolNameToKeyMap[toolName]);
+    }
+
+    // Try case-insensitive match
+    for (const [key, value] of Object.entries(toolNameToKeyMap)) {
+      if (key.toLowerCase() === toolName.toLowerCase()) {
+        return t(value);
+      }
+    }
+
+    // Fallback: return original name
+    return toolName;
   };
 
   // Translate category
@@ -82,6 +110,12 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     const categoryName = typeof category === 'string' ? category : (category?.name || 'Category');
     const key = categoryToKeyMap[categoryName];
     return key ? t(key) : categoryName;
+  };
+
+  // Drawer letter to number mapping
+  const getDrawerNumber = (drawerLetter: string): number => {
+    const drawerMap: Record<string, number> = { 'x': 1, 'y': 2, 'z': 3, 'a': 4 };
+    return drawerMap[drawerLetter?.toLowerCase()] || 1;
   };
 
   useEffect(() => {
@@ -268,7 +302,7 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
                     <span className="text-gray-500">{t('category')}:</span> <span className="font-semibold text-gray-900">{getTranslatedCategoryName(selectedBorrow.tool.category)}</span>
                   </p>
                   <p className="text-lg text-gray-600">
-                    <span className="text-gray-500">{t('drawer')}:</span> <span className="font-bold text-blue-600 text-xl">{selectedBorrow.tool.drawer}</span>
+                    <span className="text-gray-500">{t('drawer')}:</span> <span className="font-bold text-blue-600 text-xl">{getDrawerNumber(selectedBorrow.tool.drawer)}</span>
                   </p>
                 </div>
               </div>
@@ -284,7 +318,7 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
                 </div>
                 <div>
                   <h4 className="text-lg font-bold text-gray-900 mb-1">{t('placeToolInDrawer')}</h4>
-                  <p className="text-gray-600">{t('placeToolInDrawerDesc', { drawer: selectedBorrow.tool.drawer })}</p>
+                  <p className="text-gray-600">{t('placeToolInDrawerDesc', { drawer: getDrawerNumber(selectedBorrow.tool.drawer) })}</p>
                 </div>
               </div>
             </div>
@@ -411,7 +445,7 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
                   {/* Drawer Badge */}
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full font-semibold">
-                      {t('toolDrawer', { drawer: borrow.tool.drawer })}
+                      {t('toolDrawer', { drawer: getDrawerNumber(borrow.tool.drawer) })}
                     </span>
                   </div>
 

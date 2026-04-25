@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import axios from 'axios';
+import { aiValidationService } from '../services/aiValidationService.js';
+import * as fs from 'fs';
 
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || '5001';
@@ -529,5 +531,155 @@ export const markAsReturned = async (req: Request, res: Response): Promise<void>
       success: false,
       message: 'Erreur serveur'
     });
+  }
+};
+
+// @desc    Valider le produit emprunté avec IA
+// @route   POST /api/borrows/:id/validate-product
+// @access  Public
+export const validateBorrowProduct = async (req: Request, res: Response): Promise<void> => {
+  let uploadedFilePath: string | null = null;
+  
+  try {
+    const { id } = req.params;
+    const file = (req as any).file;
+
+    if (!file) {
+      res.status(400).json({
+        success: false,
+        message: 'Image requise pour la validation'
+      });
+      return;
+    }
+
+    uploadedFilePath = file.path;
+
+    // Récupérer l'emprunt
+    const borrow = await prisma.borrow.findUnique({
+      where: { id },
+      include: {
+        tool: true,
+        user: true
+      }
+    });
+
+    if (!borrow) {
+      res.status(404).json({
+        success: false,
+        message: 'Emprunt non trouvé'
+      });
+      return;
+    }
+
+    if (borrow.status !== 'ACTIVE') {
+      res.status(400).json({
+        success: false,
+        message: `Validation impossible: l'emprunt est déjà ${borrow.status}`
+      });
+      return;
+    }
+
+    console.log(`🔍 Validating product for borrow ${id}: ${borrow.tool.name}`);
+
+    // Valider le produit avec l'IA
+    const validationResult = await aiValidationService.validateProductInImage(
+      uploadedFilePath,
+      borrow.tool.name,
+      0.5 // confiance minimum de 50%
+    );
+
+    console.log('✅ Validation result:', validationResult);
+
+    // Enregistrer le résultat de validation dans la base de données
+    const productValidation = await prisma.productValidation.create({
+      data: {
+        borrowId: id,
+        toolId: borrow.toolId,
+        isValid: validationResult.success && validationResult.is_valid,
+        expectedProduct: validationResult.expected_product || borrow.tool.name,
+        detectedProduct: validationResult.detected_product || null,
+        confidence: validationResult.confidence || 0,
+        allDetections: validationResult.all_detections || null,
+        imagePath: uploadedFilePath
+      }
+    });
+
+    // Mettre à jour le statut de l'emprunt
+    if (validationResult.success && validationResult.is_valid) {
+      // Le produit est correct - marquer comme validé
+      await prisma.borrow.update({
+        where: { id },
+        data: {
+          status: 'VALIDATED'
+        }
+      });
+
+      res.json({
+        success: true,
+        is_valid: true,
+        message: '✅ Produit valide! Emprunt confirmé',
+        validation: {
+          validationId: productValidation.id,
+          expectedProduct: validationResult.expected_product,
+          detectedProduct: validationResult.detected_product,
+          confidence: validationResult.confidence,
+          allDetections: validationResult.all_detections
+        },
+        data: {
+          borrowId: id,
+          status: 'VALIDATED',
+          toolName: borrow.tool.name,
+          userName: borrow.user.fullName
+        }
+      });
+    } else {
+      // Le produit ne correspond pas
+      res.status(400).json({
+        success: false,
+        is_valid: false,
+        message: '❌ Produit invalide! Emprunt annulé',
+        reason: validationResult.message || 'Product mismatch',
+        validation: {
+          validationId: productValidation.id,
+          expectedProduct: validationResult.expected_product,
+          detectedProduct: validationResult.detected_product || 'Aucun produit détecté',
+          confidence: validationResult.confidence,
+          allDetections: validationResult.all_detections
+        },
+        error: validationResult.error
+      });
+
+      // Reverter l'emprunt - annuler la réservation
+      await prisma.borrow.update({
+        where: { id },
+        data: {
+          status: 'REJECTED'
+        }
+      });
+
+      await prisma.tool.update({
+        where: { id: borrow.toolId },
+        data: {
+          availableQuantity: { increment: 1 },
+          borrowedQuantity: { decrement: 1 }
+        }
+      });
+    }
+  } catch (error) {
+    console.error('❌ Erreur validateBorrowProduct:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur lors de la validation',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  } finally {
+    // Nettoyer le fichier temporaire
+    if (uploadedFilePath && fs.existsSync(uploadedFilePath)) {
+      try {
+        fs.unlinkSync(uploadedFilePath);
+      } catch (cleanupError) {
+        console.warn('⚠️ Erreur lors du nettoyage du fichier:', cleanupError);
+      }
+    }
   }
 };

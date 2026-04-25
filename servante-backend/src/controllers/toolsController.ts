@@ -171,7 +171,7 @@ export const createTool = async (req: Request, res: Response): Promise<void> => 
     const tool = await prisma.tool.create({
       data: {
         name,
-        category,
+        category: { connect: { id: category } },
         imageUrl: imageUrl || '/images/default-tool.jpg',
         totalQuantity: parseInt(totalQuantity),
         availableQuantity: parseInt(totalQuantity),
@@ -187,10 +187,12 @@ export const createTool = async (req: Request, res: Response): Promise<void> => 
       data: tool
     });
   } catch (error) {
-    console.error('❌ Erreur createTool:', error);
+    console.error('❌ Erreur createTool:', error instanceof Error ? error.message : error);
+    console.error('Full error:', JSON.stringify(error, null, 2));
     res.status(500).json({
       success: false,
-      message: 'Erreur serveur'
+      message: 'Erreur serveur',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 };
@@ -226,7 +228,7 @@ export const updateTool = async (req: Request, res: Response): Promise<void> => 
     // Construire l'objet data avec uniquement les champs fournis
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
-    if (category !== undefined) updateData.category = category;
+    if (category !== undefined) updateData.category = { connect: { id: category } };
     if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
     if (size !== undefined) updateData.size = size;
     if (drawer !== undefined) updateData.drawer = drawer;

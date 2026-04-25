@@ -257,7 +257,22 @@ export const hardwareAPI = {
   getMotorStatus: async () => {
     const response = await api.get('/hardware/motor/status');
     return response.data;
-  }
+  },
+
+  scanDrawer: async (cameraId: number = 0, confidence: number = 0.35, duration: number = 20) => {
+    const response = await api.post('/hardware/drawer/scan', { cameraId, confidence, duration });
+    return response.data;
+  },
+
+  startPreview: async (cameraId: number = 0, duration: number = 600) => {
+    const response = await api.post('/hardware/camera/preview/start', { cameraId, duration });
+    return response.data;
+  },
+
+  stopPreview: async () => {
+    const response = await api.post('/hardware/camera/preview/stop');
+    return response.data;
+  },
 };
 
 export default api;

@@ -31,6 +31,7 @@ model Tool {
   
   category          Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   borrows           Borrow[]
+  validations       ProductValidation[]
 }
 
 model User {
@@ -59,6 +60,26 @@ model Borrow {
 
   user User @relation(fields: [userId], references: [id])
   tool Tool @relation(fields: [toolId], references: [id])
+  validations ProductValidation[]
+}
+
+model ProductValidation {
+  id                  String   @id @default(uuid())
+  borrowId            String
+  toolId              String
+  isValid             Boolean
+  expectedProduct     String
+  detectedProduct     String?
+  confidence          Float?
+  allDetections       Json?
+  imagePath           String?
+  validatedAt         DateTime @default(now())
+
+  borrow Borrow @relation(fields: [borrowId], references: [id], onDelete: Cascade)
+  tool   Tool   @relation(fields: [toolId], references: [id])
+
+  @@index([borrowId])
+  @@index([toolId])
 }
 
 enum Role {
@@ -70,6 +91,8 @@ enum Role {
 
 enum BorrowStatus {
   ACTIVE
+  VALIDATED
+  REJECTED
   RETURNED
   OVERDUE
 }

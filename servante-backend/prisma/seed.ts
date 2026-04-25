@@ -75,117 +75,90 @@ async function main() {
   console.log('✅ 6 utilisateurs créés');
 
   // ========== CRÉER LES CATÉGORIES ==========
-  const categoryTournevis = await prisma.category.create({
-    data: { name: 'Tournevis' }
+  const categoryOutils = await prisma.category.create({
+    data: { name: 'Outils' }
   });
 
-  const categoryCles = await prisma.category.create({
-    data: { name: 'Clés' }
-  });
+  console.log('✅ 1 catégorie créée');
 
-  const categoryPinces = await prisma.category.create({
-    data: { name: 'Pinces' }
-  });
-
-  const categoryMarquage = await prisma.category.create({
-    data: { name: 'Outils de marquage' }
-  });
-
-  const categoryCoupe = await prisma.category.create({
-    data: { name: 'Outils de coupe' }
-  });
-
-  console.log('✅ 5 catégories créées');
-
-  // ========== TIROIR 1: Tournevis (8 outils) ==========
+  // ========== OUTILS (19 outils) ==========
   const tool1 = await prisma.tool.create({
-    data: { name: 'Tournevis Plat Grand', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-plat-grand.jpg', size: 'Grand', drawer: '1', totalQuantity: 4, availableQuantity: 2, borrowedQuantity: 2 }
+    data: { name: 'Clé L grande', categoryId: categoryOutils.id, imageUrl: '/images/cle L grande.webp', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool2 = await prisma.tool.create({
-    data: { name: 'Tournevis Plat Moyen', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-plat-moyen.webp', size: 'Moyen', drawer: '1', totalQuantity: 5, availableQuantity: 5, borrowedQuantity: 0 }
+    data: { name: 'Clé L petite', categoryId: categoryOutils.id, imageUrl: '/images/cle L petite.webp', size: 'Moyen', drawer: '3', totalQuantity: 2, availableQuantity: 2, borrowedQuantity: 0 }
   });
   
   const tool3 = await prisma.tool.create({
-    data: { name: 'Tournevis Plat Petit', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-plat-petit.webp', size: 'Petit', drawer: '1', totalQuantity: 3, availableQuantity: 2, borrowedQuantity: 1 }
+    data: { name: 'Cutteur', categoryId: categoryOutils.id, imageUrl: '/images/CUTTEUR.avif', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool4 = await prisma.tool.create({
-    data: { name: 'Tournevis Plat Mini', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-plat-mini.jpg', size: 'Mini', drawer: '1', totalQuantity: 6, availableQuantity: 4, borrowedQuantity: 2 }
+    data: { name: 'Dénudeur automatique', categoryId: categoryOutils.id, imageUrl: '/images/DENUDEUR AUTOMATIQUE.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool5 = await prisma.tool.create({
-    data: { name: 'Tournevis Américain Grand', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-americain-grand.jpg', size: 'Grand', drawer: '1', totalQuantity: 4, availableQuantity: 4, borrowedQuantity: 0 }
+    data: { name: 'Lot de clés plates', categoryId: categoryOutils.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '3', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool6 = await prisma.tool.create({
-    data: { name: 'Tournevis Américain Moyen', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-americain-moyen.jpg', size: 'Moyen', drawer: '1', totalQuantity: 5, availableQuantity: 3, borrowedQuantity: 2 }
+    data: { name: 'Multimètre', categoryId: categoryOutils.id, imageUrl: '/images/MULTIMETRE.jpg', size: 'Moyen', drawer: '4', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool7 = await prisma.tool.create({
-    data: { name: 'Tournevis Américain Petit', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-americain-petit.jpg', size: 'Petit', drawer: '1', totalQuantity: 4, availableQuantity: 2, borrowedQuantity: 2 }
+    data: { name: 'Mini pince coupante', categoryId: categoryOutils.id, imageUrl: '/images/Mini pince COUPANTE.jpg', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool8 = await prisma.tool.create({
-    data: { name: 'Tournevis Américain Mini', categoryId: categoryTournevis.id, imageUrl: '/images/Tournevis/tournevis-americain-mini.jpg', size: 'Mini', drawer: '1', totalQuantity: 3, availableQuantity: 3, borrowedQuantity: 0 }
+    data: { name: 'Mini pince à bec rond', categoryId: categoryOutils.id, imageUrl: '/images/Mini pince à bec ROND.jpg', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
-
-  // ========== TIROIR 2: Clés (4 outils) ==========
+  
   const tool9 = await prisma.tool.create({
-    data: { name: 'Clé à Molette', categoryId: categoryCles.id, imageUrl: '/images/Clés/cle-molette.webp', drawer: '2', totalQuantity: 6, availableQuantity: 5, borrowedQuantity: 1 }
+    data: { name: 'Mini pince à bec demi-rond coudé', categoryId: categoryOutils.id, imageUrl: '/images/Mini pince à bec demi-rond coudé.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool10 = await prisma.tool.create({
-    data: { name: 'Jeu de Clés Six Pans Coudées', categoryId: categoryCles.id, imageUrl: '/images/Clés/jeu-cles-six-pans-coudees.webp', drawer: '2', totalQuantity: 3, availableQuantity: 2, borrowedQuantity: 1 }
+    data: { name: 'Mini pince à bec plat', categoryId: categoryOutils.id, imageUrl: '/images/Mini pince à bec plat.jpg', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool11 = await prisma.tool.create({
-    data: { name: 'Jeu de Clés Six Pans Droites', categoryId: categoryCles.id, imageUrl: '/images/Clés/jeu-cles-six-pans-droites.jpeg', drawer: '2', totalQuantity: 4, availableQuantity: 3, borrowedQuantity: 1 }
+    data: { name: 'Perceuse', categoryId: categoryOutils.id, imageUrl: '/images/PERCEUSE.webp', size: 'Moyen', drawer: '4', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool12 = await prisma.tool.create({
-    data: { name: 'Jeu de Clés en Étoile', categoryId: categoryCles.id, imageUrl: '/images/Clés/jeu-de-cles-en-etoile-a-extremite-creuse-cles-plat.webp', drawer: '2', totalQuantity: 5, availableQuantity: 4, borrowedQuantity: 1 }
+    data: { name: 'Pied à coulisse', categoryId: categoryOutils.id, imageUrl: '/images/PIED A COULISSE.jpg', size: 'Moyen', drawer: '4', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
-
-  // ========== TIROIR 3: Pinces (5 outils) ==========
+  
   const tool13 = await prisma.tool.create({
-    data: { name: 'Pince Électronique de Précision', categoryId: categoryPinces.id, imageUrl: '/images/Pinces/pince-electronique-precision.jpg', drawer: '3', totalQuantity: 7, availableQuantity: 6, borrowedQuantity: 1 }
+    data: { name: 'Pince à bec coudé', categoryId: categoryOutils.id, imageUrl: '/images/PINCE A BEC COUDE.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool14 = await prisma.tool.create({
-    data: { name: 'Mini Pince Coupante', categoryId: categoryPinces.id, imageUrl: '/images/Pinces/mini-pince-coupante.webp', drawer: '3', totalQuantity: 4, availableQuantity: 3, borrowedQuantity: 1 }
+    data: { name: 'Pince à dénuder', categoryId: categoryOutils.id, imageUrl: '/images/PINCE A DENUDER.webp', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool15 = await prisma.tool.create({
-    data: { name: 'Mini Pince Bec Demi-Rond Coudé', categoryId: categoryPinces.id, imageUrl: '/images/Pinces/mini-pince-bec-demi-rond-coude.webp', drawer: '3', totalQuantity: 5, availableQuantity: 3, borrowedQuantity: 2 }
+    data: { name: 'Pince universelle', categoryId: categoryOutils.id, imageUrl: '/images/PINCE UNIVERSELLE.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool16 = await prisma.tool.create({
-    data: { name: 'Mini Pince Bec Demi-Rond', categoryId: categoryPinces.id, imageUrl: '/images/Pinces/mini-pince-bec-demi-rond.webp', drawer: '3', totalQuantity: 6, availableQuantity: 4, borrowedQuantity: 2 }
+    data: { name: 'Pince coupante', categoryId: categoryOutils.id, imageUrl: '/images/pince COUPANTE.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool17 = await prisma.tool.create({
-    data: { name: 'Mini Pince Bec Plat', categoryId: categoryPinces.id, imageUrl: '/images/Pinces/mini-pince-bec-plat.jpg', drawer: '3', totalQuantity: 8, availableQuantity: 6, borrowedQuantity: 2 }
+    data: { name: 'Pince à bec plat', categoryId: categoryOutils.id, imageUrl: '/images/pince à bec plat.jpg', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
-
-  // ========== TIROIR 4: Marquage & Coupe (4 outils) ==========
+  
   const tool18 = await prisma.tool.create({
-    data: { name: 'Pointe à Tracer', categoryId: categoryMarquage.id, imageUrl: '/images/Outils de marquage/pointe-a-tracer.jpg', drawer: '4', totalQuantity: 8, availableQuantity: 7, borrowedQuantity: 1 }
+    data: { name: 'Tournevis américain moyen', categoryId: categoryOutils.id, imageUrl: '/images/Tournevis/tournevis-americain-moyen.jpg', size: 'Moyen', drawer: '3', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
   
   const tool19 = await prisma.tool.create({
-    data: { name: 'Pointeau Automatique', categoryId: categoryMarquage.id, imageUrl: '/images/Outils de marquage/pointeau-automatique.png', drawer: '4', totalQuantity: 5, availableQuantity: 4, borrowedQuantity: 1 }
-  });
-  
-  const tool20 = await prisma.tool.create({
-    data: { name: 'Ciseaux', categoryId: categoryCoupe.id, imageUrl: '/images/Outils de coupe/ciseaux.jpeg', drawer: '4', totalQuantity: 10, availableQuantity: 8, borrowedQuantity: 2 }
-  });
-  
-  const tool21 = await prisma.tool.create({
-    data: { name: 'Cutteur', categoryId: categoryCoupe.id, imageUrl: '/images/Outils de coupe/cutteur.webp', drawer: '4', totalQuantity: 12, availableQuantity: 11, borrowedQuantity: 1 }
+    data: { name: 'Tournevis plat moyen', categoryId: categoryOutils.id, imageUrl: '/images/Tournevis/tournevis-plat-moyen.webp', size: 'Moyen', drawer: '3', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 }
   });
 
-  console.log('✅ 21 outils créés');
+  console.log('✅ 19 outils créés');
 
   // ========== CRÉER LES EMPRUNTS ==========
   const now = new Date();
@@ -200,7 +173,8 @@ async function main() {
     return date;
   };
 
-  // Emprunts d'Ahmed (2 actifs, 3 retournés)
+  // Emprunts d'exemple
+  // Emprunt 1 - Ahmed (Clé L grande)
   await prisma.borrow.create({
     data: {
       userId: ahmed.id,
@@ -211,50 +185,7 @@ async function main() {
     }
   });
 
-  await prisma.borrow.create({
-    data: {
-      userId: ahmed.id,
-      toolId: tool9.id,
-      borrowDate: daysAgo(2),
-      dueDate: daysFromNow(5),
-      status: 'ACTIVE'
-    }
-  });
-
-  await prisma.borrow.create({
-    data: {
-      userId: ahmed.id,
-      toolId: tool18.id,
-      borrowDate: daysAgo(30),
-      dueDate: daysAgo(23),
-      returnDate: daysAgo(25),
-      status: 'RETURNED'
-    }
-  });
-
-  await prisma.borrow.create({
-    data: {
-      userId: ahmed.id,
-      toolId: tool13.id,
-      borrowDate: daysAgo(50),
-      dueDate: daysAgo(43),
-      returnDate: daysAgo(40),
-      status: 'RETURNED'
-    }
-  });
-
-  await prisma.borrow.create({
-    data: {
-      userId: ahmed.id,
-      toolId: tool20.id,
-      borrowDate: daysAgo(70),
-      dueDate: daysAgo(63),
-      returnDate: daysAgo(56),
-      status: 'RETURNED'
-    }
-  });
-
-  // Emprunt de Fatima (EN RETARD)
+  // Emprunt 2 - Fatima (Cutteur, EN RETARD)
   await prisma.borrow.create({
     data: {
       userId: fatima.id,
@@ -265,51 +196,51 @@ async function main() {
     }
   });
 
-  // Emprunt de Youssef (BIENTÔT EN RETARD)
+  // Emprunt 3 - Youssef (Multimètre, BIENTÔT EN RETARD)
   await prisma.borrow.create({
     data: {
       userId: youssef.id,
-      toolId: tool14.id,
+      toolId: tool6.id,
       borrowDate: daysAgo(5),
       dueDate: daysFromNow(2),
       status: 'ACTIVE'
     }
   });
 
-  // Emprunt de Sara (OK)
+  // Emprunt 4 - Sara (Mini pince coupante)
   await prisma.borrow.create({
     data: {
       userId: sara.id,
-      toolId: tool21.id,
+      toolId: tool7.id,
       borrowDate: daysAgo(2),
       dueDate: daysFromNow(5),
       status: 'ACTIVE'
     }
   });
 
-  // Emprunt de Karim (TRÈS EN RETARD)
+  // Emprunt 5 - Karim (Perceuse, TRÈS EN RETARD)
   await prisma.borrow.create({
     data: {
       userId: karim.id,
-      toolId: tool10.id,
+      toolId: tool11.id,
       borrowDate: daysAgo(17),
       dueDate: daysAgo(10),
       status: 'ACTIVE'
     }
   });
 
-  // Emprunt de Leila (CRITIQUE - 1 jour restant)
+  // Emprunt 6 - Leila (Pied à coulisse, CRITIQUE - 1 jour restant)
   await prisma.borrow.create({
     data: {
       userId: leila.id,
-      toolId: tool19.id,
+      toolId: tool12.id,
       borrowDate: daysAgo(6),
       dueDate: daysFromNow(1),
       status: 'ACTIVE'
     }
   });
 
-  console.log('✅ 10 emprunts créés');
+  console.log('✅ 6 emprunts créés');
   console.log('🎉 Seed terminé avec succès !');
 }
 
