@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient, Role } from '@prisma/client';
+import { syncSeed } from '../services/seedSyncService.js';
 
 const prisma = new PrismaClient();
 
@@ -90,6 +91,7 @@ export const createUser = async (req: Request, res: Response) => {
       }
     });
 
+    syncSeed();
     res.status(201).json({
       success: true,
       message: 'Utilisateur créé avec succès',
@@ -194,7 +196,7 @@ export const updateUser = async (req: Request, res: Response) => {
     });
 
     console.log('✅ Utilisateur mis à jour:', updatedUser);
-
+    syncSeed();
     res.json({
       success: true,
       message: 'Utilisateur modifié avec succès',
@@ -265,7 +267,7 @@ export const deleteUser = async (req: Request, res: Response) => {
     });
 
     console.log('✅ Utilisateur supprimé avec succès:', id);
-
+    syncSeed();
     res.json({
       success: true,
       message: 'Utilisateur supprimé avec succès'

@@ -23,6 +23,7 @@ import hardwareRoutes from './routes/hardwareRoutes';
 import categoriesRoutes from './routes/categoriesRoutes';
 import analyticsRoutes from './routes/analyticsRoutes';
 import chatbotRoutes from './routes/chatbotRoutes';
+import detectionRoutes from './routes/detectionRoutes';
 
 // Importer le service ChromaDB
 import { chromaService } from './services/chatbot/chromaService';
@@ -58,9 +59,9 @@ app.use(cors({
   credentials: true
 }));
 
-// Parser le body JSON
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Parser le body JSON — limit élevée pour les images base64 (~640x360 JPEG ≈ 200 KB en base64)
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 // Serve static files from public folder
 app.use(express.static(path.join(__dirname, '../public')));
@@ -97,6 +98,8 @@ app.use('/api/hardware', hardwareRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/rfid', rfidRoutes);
 app.use('/api/chatbot', chatbotRoutes);
+app.use('/api/detection', detectionRoutes);
+app.use('/api/borrows', detectionRoutes);
 
 // ============================================
 // GESTION DES ERREURS

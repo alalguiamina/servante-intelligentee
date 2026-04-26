@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { syncSeed } from '../services/seedSyncService.js';
 
 const prisma = new PrismaClient();
 
@@ -65,6 +66,7 @@ export const createCategory = async (req: Request, res: Response): Promise<void>
       }
     });
 
+    syncSeed();
     res.status(201).json({
       success: true,
       message: 'Catégorie créée avec succès',
@@ -130,6 +132,7 @@ export const updateCategory = async (req: Request, res: Response): Promise<void>
       }
     });
 
+    syncSeed();
     res.status(200).json({
       success: true,
       message: 'Catégorie mise à jour avec succès',
@@ -180,6 +183,7 @@ export const deleteCategory = async (req: Request, res: Response): Promise<void>
       where: { id }
     });
 
+    syncSeed();
     res.status(200).json({
       success: true,
       message: 'Catégorie supprimée avec succès'

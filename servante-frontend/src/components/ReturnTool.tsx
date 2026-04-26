@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Loader, CheckCircle, AlertCircle, Package } from 'lucide-react';
 import { borrowsAPI } from '../services/api';
 import { useTranslation } from 'react-i18next';
+import ProductValidation from './ProductValidation';
 
 interface Borrow {
   id: string;
@@ -34,8 +35,8 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
   const [activeBorrows, setActiveBorrows] = useState<Borrow[]>([]);
   const [selectedBorrow, setSelectedBorrow] = useState<Borrow | null>(null);
   const [loading, setLoading] = useState(true);
-  const [returning, setReturning] = useState(false);
-  const [status, setStatus] = useState<'list' | 'opening-drawer' | 'returning' | 'closing' | 'success' | 'error'>('list');
+  const [returning] = useState(false);
+  const [status, setStatus] = useState<'list' | 'opening-drawer' | 'returning' | 'validating' | 'closing' | 'success' | 'error'>('list');
   const [errorMessage, setErrorMessage] = useState('');
 
   // Tool name translation map
@@ -74,7 +75,19 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     'PERCEUSE': 'tool.perceuse',
     'PIED A COULISSE': 'tool.piedACoulisse',
     'MULTIMETRE': 'tool.multimetre',
-    // Database exact matches (lowercase from seed)
+    // Noms exacts de la base de données (seed) avec accents
+    'Pince à dénuder': 'tool.pinceADenuder',
+    'Dénudeur automatique': 'tool.denudeurAutomatique',
+    'Mini pince coupante': 'tool.miniPinceCoupante',
+    'Mini pince à bec rond': 'tool.miniPinceBecRond',
+    'Pince coupante': 'tool.pinceCoupante',
+    'Pince universelle': 'tool.pinceUniverselle',
+    'Pince à bec coudée': 'tool.pinceABecCoude',
+    'Tournevis plat': 'tool.tournevisPlat',
+    'Tournevis américain': 'tool.tournevisAmericain',
+    'Pied à coulisse': 'tool.piedACoulisse',
+    'Multimètre': 'tool.multimetre',
+    'Mini pince à bec demi-rond coudée': 'tool.miniPinceBecDemiRondCoude',
     'Mini pince à bec demi-rond coudé': 'tool.miniPinceBecDemiRondCoude',
     'Mini pince à bec plat': 'tool.miniPinceBecPlat',
   };
@@ -164,14 +177,17 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     }
   };
 
-  const handleCompleteReturn = async () => {
-    if (!selectedBorrow) return;
+  const handleCompleteReturn = () => {
+    // Lancer la validation YOLO avant de fermer le tiroir
+    setStatus('validating');
+  };
 
+  const handleValidationSuccess = async () => {
+    if (!selectedBorrow) return;
     try {
-      setReturning(true);
       setStatus('closing');
 
-      // Close the drawer first
+      // Fermer le tiroir
       if (selectedBorrow.tool.drawer) {
         try {
           await fetch(`${import.meta.env.VITE_API_URL}/hardware/drawer/close`, {
@@ -179,18 +195,16 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ drawerNumber: selectedBorrow.tool.drawer.toString() }),
           });
-          console.log(`✅ Drawer ${selectedBorrow.tool.drawer} closing`);
         } catch (error) {
           console.error('Error closing drawer:', error);
         }
       }
 
+      // Confirmer le retour en base
       const result = await borrowsAPI.return(selectedBorrow.id);
-
       if (result.success) {
         setStatus('success');
-        setActiveBorrows(activeBorrows.filter(b => b.id !== selectedBorrow.id));
-
+        setActiveBorrows(prev => prev.filter(b => b.id !== selectedBorrow.id));
         setTimeout(() => {
           setSelectedBorrow(null);
           setStatus('list');
@@ -204,9 +218,28 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
       console.error('Error returning tool:', error);
       setStatus('error');
       setErrorMessage('Error returning tool');
-    } finally {
-      setReturning(false);
     }
+  };
+
+  const handleValidationFailure = async (reason: string) => {
+    // Annuler = fermer le tiroir et revenir à la liste
+    if (selectedBorrow?.tool.drawer) {
+      try {
+        await fetch(`${import.meta.env.VITE_API_URL}/hardware/drawer/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ drawerNumber: selectedBorrow.tool.drawer.toString() }),
+        });
+      } catch { /* silencieux si le matériel est indisponible */ }
+    }
+    setErrorMessage(reason);
+    setSelectedBorrow(null);
+    setStatus('list');
+  };
+
+  const handleRetry = () => {
+    // Réessayer = garder le tiroir ouvert et revenir aux instructions
+    setStatus('returning');
   };
 
   // LOADING
@@ -268,8 +301,35 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     );
   }
 
+  // YOLO VALIDATION
+  if (status === 'validating' && selectedBorrow) {
+    return (
+      <ProductValidation
+        toolName={selectedBorrow.tool.name}
+        borrowId={selectedBorrow.id}
+        drawerId={selectedBorrow.tool.drawer || undefined}
+        action="return"
+        onValidationSuccess={handleValidationSuccess}
+        onValidationFailure={handleValidationFailure}
+        onRetry={handleRetry}
+      />
+    );
+  }
+
+  // CLOSING - waiting after validation
+  if (status === 'closing') {
+    return (
+      <div className="h-screen bg-gradient-to-b from-blue-50 to-indigo-50 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <Loader className="w-12 h-12 text-blue-500 animate-spin mx-auto" />
+          <p className="text-lg text-gray-700 font-semibold">{t('closingDrawer')}</p>
+        </div>
+      </div>
+    );
+  }
+
   // DRAWER OPENED - RETURNING TOOL
-  if ((status === 'opening-drawer' || status === 'returning' || status === 'closing') && selectedBorrow) {
+  if ((status === 'opening-drawer' || status === 'returning') && selectedBorrow) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-blue-50 via-indigo-50 to-blue-50 flex items-center justify-center p-4">
         <div className="w-full max-w-2xl">

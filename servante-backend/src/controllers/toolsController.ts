@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { syncSeed } from '../services/seedSyncService.js';
 
 const prisma = new PrismaClient();
 
@@ -181,6 +182,7 @@ export const createTool = async (req: Request, res: Response): Promise<void> => 
       }
     });
 
+    syncSeed();
     res.status(201).json({
       success: true,
       message: 'Outil créé avec succès',
@@ -247,6 +249,7 @@ export const updateTool = async (req: Request, res: Response): Promise<void> => 
       data: updateData
     });
 
+    syncSeed();
     res.status(200).json({
       success: true,
       message: 'Outil mis à jour avec succès',
@@ -328,7 +331,7 @@ export const deleteTool = async (req: Request, res: Response): Promise<void> => 
     });
 
     console.log('✅ Outil supprimé avec succès:', id);
-
+    syncSeed();
     res.status(200).json({
       success: true,
       message: 'Outil supprimé avec succès'

@@ -224,40 +224,50 @@ const toolNameToKeyMap: Record<string, string> = {
   'Pointeau Automatique': 'tool.pointeauAutomatique',
   'Ciseaux': 'tool.ciseaux',
   'Cutteur': 'tool.cutteur',
-  // New tools
+  // Noms exacts de la base de données (seed)
+  'Pince à dénuder': 'tool.pinceADenuder',
   'PINCE A DENUDER': 'tool.pinceADenuder',
   'Pince à bec plat': 'tool.pinceBecPlat',
+  'Mini pince à bec rond': 'tool.miniPinceBecRond',
   'Mini pince à bec ROND': 'tool.miniPinceBecRond',
+  'Dénudeur automatique': 'tool.denudeurAutomatique',
   'DENUDEUR AUTOMATIQUE': 'tool.denudeurAutomatique',
+  'Mini pince coupante': 'tool.miniPinceCoupante',
+  'Pince coupante': 'tool.pinceCoupante',
   'Pince COUPANTE': 'tool.pinceCoupante',
+  'Pince universelle': 'tool.pinceUniverselle',
   'PINCE UNIVERSELLE': 'tool.pinceUniverselle',
+  'Pince à bec coudée': 'tool.pinceABecCoude',
   'PINCE A BEC COUDE': 'tool.pinceABecCoude',
   'Clé L grande': 'tool.cleLGrande',
   'Clé L petite': 'tool.cleLPetite',
   'Lot de clés plates': 'tool.lotClesPlates',
+  'Tournevis plat': 'tool.tournevisPlat',
+  'Tournevis américain': 'tool.tournevisAmericain',
+  'Perceuse': 'tool.perceuse',
   'PERCEUSE': 'tool.perceuse',
+  'Pied à coulisse': 'tool.piedACoulisse',
   'PIED A COULISSE': 'tool.piedACoulisse',
+  'Multimètre': 'tool.multimetre',
   'MULTIMETRE': 'tool.multimetre',
-  // Database exact matches (lowercase from seed)
+  'Mini pince à bec demi-rond coudée': 'tool.miniPinceBecDemiRondCoude',
   'Mini pince à bec demi-rond coudé': 'tool.miniPinceBecDemiRondCoude',
   'Mini pince à bec plat': 'tool.miniPinceBecPlat',
 };
 
 const getToolTranslationKey = (toolName: string): string => {
-  // First try exact match
+  // Exact match
   if (toolNameToKeyMap[toolName]) {
     return toolNameToKeyMap[toolName];
   }
-
-  // Try case-insensitive match
+  // Case-insensitive match
   for (const [key, value] of Object.entries(toolNameToKeyMap)) {
     if (key.toLowerCase() === toolName.toLowerCase()) {
       return value;
     }
   }
-
-  // Fallback: auto-generate key
-  return `tool.${toolName.toLowerCase().replace(/\s+/g, '')}`;
+  // Fallback: retourner le nom brut (plutôt qu'une clé invalide)
+  return toolName;
 };
 
 // ============================================
@@ -869,7 +879,8 @@ const AdminBorrowsTable: React.FC<{
   onSendEmail: (borrow: BorrowRecord) => void;
   onSendBulkEmail: (borrows: BorrowRecord[]) => void;
   getTranslatedToolName: (toolName: string) => string;
-}> = ({ borrows, onSendEmail, onSendBulkEmail, getTranslatedToolName }) => {
+  onReturnAll?: () => void;
+}> = ({ borrows, onSendEmail, onSendBulkEmail, getTranslatedToolName, onReturnAll }) => {
   const { t, i18n } = useTranslation();
 
   // Calculer les emprunts en retard
@@ -906,6 +917,16 @@ const AdminBorrowsTable: React.FC<{
 
         <div className="flex items-center gap-3">
 
+          {/* Return All button */}
+          {onReturnAll && (
+            <button
+              onClick={onReturnAll}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all font-semibold flex items-center gap-2"
+            >
+              <CheckCircle className="w-4 h-4" />
+              {t('returnAll')}
+            </button>
+          )}
 
           {/* Export Excel */}
           <button
@@ -2373,46 +2394,24 @@ export default function App() {
             }
           }
         } else {
-          // ✅ MODE EMPRUNT - Créer un nouvel emprunt
-          console.log('📤 Envoi emprunt:', {
-            userId: currentUser.id,
-            toolId: selectedTool.id,
-            quantity: 1
-          });
-
+          // ✅ MODE EMPRUNT — créer l'emprunt, ouvrir le tiroir en arrière-plan,
+          // puis afficher DIRECTEMENT la caméra YOLO pour 15 secondes
           const result = await borrowsAPI.borrow(currentUser.id, selectedTool.id, 1);
 
           if (result.success) {
-            // Ouvrir le tiroir si le numéro est défini
+            // Stocker l'ID de l'emprunt (retourné par le backend dans result.data.id)
+            const newBorrowId: string | null = result.data?.id ?? null;
+            setActiveBorrowId(newBorrowId);
+
+            // Ouvrir le tiroir en arrière-plan sans bloquer l'affichage de la caméra
             if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
-              try {
-                console.log(`🔓 Ouverture du tiroir ${selectedTool.drawer} pour ${selectedTool.name}...`);
-                const drawerResult = await hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4');
-                if (drawerResult.success) {
-                  // Afficher l'écran du tiroir ouvert
-                  setCurrentScreen('drawer-open');
-                } else {
-                  alert(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('borrowSuccess')}!`);
-                  await loadBorrowsFromBackend();
-                  await loadToolsFromBackend();
-                  setSelectedTool(null);
-                  setCurrentScreen('tool-selection');
-                }
-              } catch (error) {
-                console.warn('⚠️ Moteurs non disponibles ou erreur:', error);
-                alert(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('borrowSuccess')}!`);
-                await loadBorrowsFromBackend();
-                await loadToolsFromBackend();
-                setSelectedTool(null);
-                setCurrentScreen('tool-selection');
-              }
-            } else {
-              alert(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('borrowSuccess')}!`);
-              await loadBorrowsFromBackend();
-              await loadToolsFromBackend();
-              setSelectedTool(null);
-              setCurrentScreen('tool-selection');
+              hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
+                console.warn('⚠️ Tiroir non disponible');
+              });
             }
+
+            // Aller directement à la détection YOLO (caméra en temps réel)
+            setCurrentScreen('product-validation');
           } else {
             alert(`❌ ${t('borrowError')}`);
           }
@@ -2495,38 +2494,6 @@ export default function App() {
                   </div>
                 </div>
               )}
-
-              {/* Aperçu caméra en direct */}
-              <div className="mt-5 rounded-xl overflow-hidden border-2 border-slate-700 bg-slate-900">
-                <div className="flex items-center justify-between px-4 py-2 bg-slate-800">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${previewReady ? 'bg-green-400' : 'bg-yellow-400'}`} />
-                    <span className="text-white text-sm font-semibold">
-                      {previewReady ? 'LIVE — Détection YOLO' : 'Chargement du modèle…'}
-                    </span>
-                  </div>
-                  <span className="text-slate-400 text-xs">EasyCamera 5M</span>
-                </div>
-                <div className="relative bg-black" style={{ minHeight: '180px' }}>
-                  {/* Spinner overlay until first frame loads */}
-                  {!previewReady && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
-                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-400" />
-                      <span className="text-slate-400 text-xs">best (2).pt — chargement modèle…</span>
-                    </div>
-                  )}
-                  {/* Camera image — always in DOM once previewTs > 0, opacity-0 until loaded */}
-                  {previewTs > 0 && (
-                    <img
-                      src={`${API_BASE_URL.replace('/api', '')}/api/hardware/camera/preview?t=${previewTs}`}
-                      alt="Aperçu caméra"
-                      className="w-full object-contain"
-                      style={{ maxHeight: '260px', opacity: previewReady ? 1 : 0, transition: 'opacity 0.3s' }}
-                      onLoad={() => setPreviewReady(true)}
-                    />
-                  )}
-                </div>
-              </div>
 
               <div className="mt-6 flex gap-4">
                 <button
@@ -2616,11 +2583,17 @@ export default function App() {
               b.userName === currentUser.fullName &&
               (b.status === 'active' || b.status === 'overdue')
           );
-          if (activeBorrow) await borrowsAPI.markAsReturned(activeBorrow.id);
-          setSelectedTool(null);
-          setIsReturnMode(false);
-          setDrawerScanResult(null);
-          setCurrentScreen('tool-selection');
+          if (activeBorrow) {
+            // Stocker l'emprunt et laisser YOLO valider avant de confirmer le retour
+            setActiveBorrowId(activeBorrow.id);
+            setDrawerScanResult(null);
+            setCurrentScreen('product-validation');
+          } else {
+            setSelectedTool(null);
+            setIsReturnMode(false);
+            setDrawerScanResult(null);
+            setCurrentScreen('tool-selection');
+          }
         } else {
           const activeBorrow = allBorrows.find(
             b => b.toolId === selectedTool.id &&
@@ -3110,83 +3083,6 @@ export default function App() {
               </div>
               <p className="text-4xl font-bold text-green-500">{onTimeRate}%</p>
             </div>
-          </div>
-
-          {/* ✅ Emprunts en cours avec indicateurs de statut */}
-          <div className="bg-white rounded-2xl p-6 shadow-lg border border-slate-200 mb-8">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-xl font-bold text-slate-900">{t('currentBorrows')}</h3>
-              <span className="px-4 py-2 bg-amber-100 text-amber-700 rounded-full text-sm font-bold">
-                {activeBorrows.length} {t('active')}
-              </span>
-            </div>
-
-            {activeBorrows.length === 0 ? (
-              <div className="text-center py-12">
-                <Package className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-                <p className="text-slate-600">{t('noActiveBorrows')}</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {activeBorrows.map(borrow => {
-                  const borderColor = borrow.status === 'overdue'
-                    ? 'border-red-300 bg-red-50'
-                    : borrow.isDueSoon
-                      ? 'border-amber-300 bg-amber-50'
-                      : 'border-blue-300 bg-blue-50';
-
-                  const iconColor = borrow.status === 'overdue'
-                    ? 'from-red-500 to-red-600'
-                    : borrow.isDueSoon
-                      ? 'from-amber-500 to-amber-600'
-                      : 'from-blue-700 to-blue-800';
-
-                  return (
-                    <div key={borrow.id} className={`flex items-center justify-between p-4 rounded-xl border-2 ${borderColor}`}>
-                      <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${iconColor} flex items-center justify-center text-white font-bold`}>
-                          {borrow.status === 'overdue' ? <AlertCircle className="w-6 h-6" /> :
-                            borrow.isDueSoon ? <Bell className="w-6 h-6" /> :
-                              <Package className="w-6 h-6" />}
-                        </div>
-                        <div>
-                          <h4 className="font-bold text-slate-900">{getTranslatedToolName(borrow.toolName)}</h4>
-                          <p className="text-sm text-slate-600">
-                            {t('borrowed')}: {new Date(borrow.borrowDate).toLocaleDateString('fr-FR')} -
-                            {t('drawer')} {getDrawerNumber(borrow.drawer)}
-                          </p>
-                          {borrow.status === 'overdue' && (
-                            <p className="text-sm font-bold text-red-600">
-                              ⚠️ {t('overdue')} de {borrow.daysLate} {borrow.daysLate > 1 ? t('days') : t('days')}
-                            </p>
-                          )}
-                          {borrow.isDueSoon && (
-                            <p className="text-sm font-bold text-amber-600">
-                              ⏰ {t('alertReturnIn')} {borrow.daysUntilDue} {borrow.daysUntilDue > 1 ? t('days') : t('days')}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => {
-                          setSelectedTool(tools.find(t => t.id === borrow.toolId) || null);
-                          setIsReturnMode(true);
-                          setCurrentScreen('confirm-borrow');
-                        }}
-                        className={`px-6 py-2 rounded-lg transition-all font-semibold ${borrow.status === 'overdue'
-                          ? 'bg-red-500 hover:bg-red-600 text-white'
-                          : borrow.isDueSoon
-                            ? 'bg-amber-500 hover:bg-amber-600 text-white'
-                            : 'bg-blue-600 hover:bg-blue-700 text-white'
-                          }`}
-                      >
-                        {t('return')}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
 
           {/* ✅ Historique des emprunts */}
@@ -4592,6 +4488,26 @@ export default function App() {
               onSendEmail={handleSendEmail}
               onSendBulkEmail={handleSendBulkEmail}
               getTranslatedToolName={getTranslatedToolName}
+              onReturnAll={async () => {
+                const activeBorrowsCount = allBorrows.filter(
+                  b => b.status === 'active' || b.status === 'overdue'
+                ).length;
+                if (activeBorrowsCount === 0) {
+                  showToast(t('noActiveBorrows'), 'info', 3000);
+                  return;
+                }
+                if (!window.confirm(`${t('returnAllConfirm')} (${activeBorrowsCount})?`)) return;
+                try {
+                  const result = await borrowsAPI.returnAll();
+                  if (result.success) {
+                    showToast(`✅ ${result.count} ${t('toolsReturned')}`, 'success', 3000);
+                    await loadBorrowsFromBackend();
+                    await loadToolsFromBackend();
+                  }
+                } catch (err) {
+                  showToast(t('error'), 'error', 3000);
+                }
+              }}
             />
           </div>
         </div>
@@ -4617,34 +4533,69 @@ export default function App() {
   // ============================================
   // ÉCRAN - VALIDATION PRODUIT IA
   // ============================================
-  if (currentScreen === 'product-validation' && activeBorrowId && selectedTool) {
+  if (currentScreen === 'product-validation' && selectedTool) {
     return (
       <ProductValidation
         toolName={selectedTool.name}
-        borrowId={activeBorrowId}
-        onValidationSuccess={() => {
-          showToast('✅ Produit validé! Emprunt confirmé', 'success', 3000);
+        borrowId={activeBorrowId || ''}
+        drawerId={selectedTool.drawer || undefined}
+        action={isReturnMode ? 'return' : 'borrow'}
+        onValidationSuccess={async () => {
+          if (isReturnMode && activeBorrowId) {
+            await borrowsAPI.markAsReturned(activeBorrowId);
+            showToast('✅ Retour validé !', 'success', 3000);
+          } else {
+            showToast('✅ Emprunt confirmé !', 'success', 3000);
+          }
           setSelectedTool(null);
           setActiveBorrowId(null);
           setValidationRequired(false);
+          setIsReturnMode(false);
           setCurrentScreen('tool-selection');
           loadBorrowsFromBackend();
           loadToolsFromBackend();
         }}
-        onValidationFailure={(reason) => {
+        onValidationFailure={async (reason) => {
+          // Annuler l'emprunt en DB (attendre la réponse avant de recharger)
+          if (!isReturnMode && activeBorrowId) {
+            await borrowsAPI.cancelBorrow(activeBorrowId).catch(() => {});
+          }
+          // Fermer le tiroir
+          if (selectedTool?.drawer && ['1','2','3','4'].includes(selectedTool.drawer)) {
+            hardwareAPI.closeDrawer(selectedTool.drawer as '1'|'2'|'3'|'4').catch(() => {});
+          }
           showToast(`❌ ${reason}`, 'error', 3000);
           setSelectedTool(null);
           setActiveBorrowId(null);
           setValidationRequired(false);
+          setIsReturnMode(false);
           setCurrentScreen('tool-selection');
-          loadBorrowsFromBackend();
-          loadToolsFromBackend();
+          await loadBorrowsFromBackend();
+          await loadToolsFromBackend();
+        }}
+        onRetry={async () => {
+          // Réessayer = annuler l'emprunt en DB (attendre avant de recharger)
+          if (!isReturnMode && activeBorrowId) {
+            await borrowsAPI.cancelBorrow(activeBorrowId).catch(() => {});
+          }
+          if (selectedTool?.drawer && ['1','2','3','4'].includes(selectedTool.drawer)) {
+            hardwareAPI.closeDrawer(selectedTool.drawer as '1'|'2'|'3'|'4').catch(() => {});
+          }
+          showToast('Réessayez depuis la sélection d\'outil.', 'info', 2000);
+          setSelectedTool(null);
+          setActiveBorrowId(null);
+          setValidationRequired(false);
+          setIsReturnMode(false);
+          setCurrentScreen('tool-selection');
+          await loadBorrowsFromBackend();
+          await loadToolsFromBackend();
         }}
         onSkip={() => {
           showToast('Validation ignorée', 'info', 2000);
           setSelectedTool(null);
           setActiveBorrowId(null);
           setValidationRequired(false);
+          setIsReturnMode(false);
           setCurrentScreen('tool-selection');
         }}
       />

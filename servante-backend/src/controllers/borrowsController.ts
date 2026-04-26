@@ -683,3 +683,88 @@ export const validateBorrowProduct = async (req: Request, res: Response): Promis
     }
   }
 };
+
+// @desc    Retourner tous les outils (admin)
+// @route   POST /api/borrows/return-all
+// @access  Private (Admin)
+export const returnAllBorrows = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const activeBorrows = await prisma.borrow.findMany({
+      where: { status: { in: ['ACTIVE', 'OVERDUE'] } },
+      include: { tool: true }
+    });
+
+    if (activeBorrows.length === 0) {
+      res.status(200).json({ success: true, message: 'Aucun emprunt actif', count: 0 });
+      return;
+    }
+
+    const returnDate = new Date();
+
+    await prisma.$transaction([
+      prisma.borrow.updateMany({
+        where: { status: { in: ['ACTIVE', 'OVERDUE'] } },
+        data: { status: 'RETURNED', returnDate }
+      }),
+      ...activeBorrows.map(b =>
+        prisma.tool.update({
+          where: { id: b.toolId },
+          data: {
+            availableQuantity: { increment: 1 },
+            borrowedQuantity: { decrement: 1 }
+          }
+        })
+      )
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: `${activeBorrows.length} emprunt(s) retourné(s)`,
+      count: activeBorrows.length
+    });
+  } catch (error) {
+    console.error('Erreur returnAllBorrows:', error);
+    res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};
+
+// @desc    Annuler un emprunt (validation YOLO échouée ou annulée par l'utilisateur)
+// @route   DELETE /api/borrows/:id/cancel
+// @access  Public
+export const cancelBorrow = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    const borrow = await prisma.borrow.findUnique({
+      where: { id },
+      include: { tool: true }
+    });
+
+    if (!borrow) {
+      res.status(404).json({ success: false, message: 'Emprunt non trouvé' });
+      return;
+    }
+
+    if (borrow.status !== 'ACTIVE') {
+      res.status(400).json({ success: false, message: 'Seul un emprunt ACTIVE peut être annulé' });
+      return;
+    }
+
+    // Supprimer l'emprunt et restaurer les quantités en une transaction
+    await prisma.$transaction([
+      prisma.borrow.delete({ where: { id } }),
+      prisma.tool.update({
+        where: { id: borrow.toolId },
+        data: {
+          availableQuantity: { increment: 1 },
+          borrowedQuantity:  { decrement: 1 }
+        }
+      })
+    ]);
+
+    res.status(200).json({ success: true, message: 'Emprunt annulé et outil remis en disponibilité' });
+  } catch (error) {
+    console.error('Erreur cancelBorrow:', error);
+    res.status(500).json({ success: false, message: 'Erreur serveur' });
+  }
+};

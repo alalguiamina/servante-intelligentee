@@ -189,6 +189,18 @@ export const borrowsAPI = {
     return response.data;
   },
 
+  // Annuler un emprunt (validation YOLO échouée/annulée)
+  cancelBorrow: async (borrowId: string) => {
+    const response = await api.delete(`/borrows/${borrowId}/cancel`);
+    return response.data;
+  },
+
+  // Retourner tous les outils (admin)
+  returnAll: async () => {
+    const response = await api.post('/borrows/return-all');
+    return response.data;
+  },
+
   // Emprunts d'un utilisateur
   getUserBorrows: async (userId: string) => {
     const response = await api.get(`/borrows/user/${userId}`);

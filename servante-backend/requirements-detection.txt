@@ -1,0 +1,19 @@
+# Dépendances Python pour la détection d'objets en temps réel
+
+# Core ML Framework
+ultralytics>=8.0.0  # YOLOv8 detection model
+torch>=2.0.0        # PyTorch (dépendance d'ultralytics)
+torchvision>=0.15.0 # Computer vision utils
+
+# Image Processing
+opencv-python>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0
+
+# Utilities
+scipy>=1.11.0
+pyyaml>=6.0
+
+# Optional: GPU support (décommenter si vous avez une GPU NVIDIA)
+# torch-cuda-runtime>=2.0.0
+# tensorrt>=8.6.0
