@@ -9,6 +9,7 @@ interface ProductValidationProps {
   onValidationSuccess: () => void;
   onValidationFailure: (reason: string) => void;
   onRetry?: () => void;
+  onBorrowAlternative?: (wrongToolName: string) => void;
   onSkip?: () => void;
 }
 
@@ -20,6 +21,7 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
   onValidationSuccess,
   onValidationFailure,
   onRetry,
+  onBorrowAlternative,
 }) => {
   return (
     <RealtimeDetection
@@ -29,7 +31,8 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
       action={action}
       onDetectionSuccess={onValidationSuccess}
       onDetectionFailure={onValidationFailure}
-      onRetry={onRetry ?? (() => onValidationFailure('Détection annulée — réessayez depuis la sélection d\'outil.'))}
+      onRetry={onRetry ?? (() => onValidationFailure("Détection annulée — réessayez depuis la sélection d'outil."))}
+      onBorrowAlternative={onBorrowAlternative}
     />
   );
 };

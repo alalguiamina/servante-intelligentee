@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Camera, AlertCircle, Loader, CheckCircle, AlertTriangle, Check, X, ShieldAlert, RefreshCw } from 'lucide-react';
+import { Camera, AlertCircle, Loader, CheckCircle, AlertTriangle, Check, X, RefreshCw } from 'lucide-react';
 import { API_BASE_URL } from '../services/api';
 
 interface RealtimeDetectionProps {
@@ -10,6 +10,7 @@ interface RealtimeDetectionProps {
   onDetectionSuccess: () => void;
   onDetectionFailure: (reason: string) => void;
   onRetry: () => void;
+  onBorrowAlternative?: (wrongToolName: string) => void;
 }
 
 interface Detection {
@@ -71,7 +72,6 @@ const toDisplayNames = (dets: Detection[]) =>
 const normalize = (s: string) =>
   s.toLowerCase().trim().replace(/-/g, ' ').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
-const KNOWN_CLASSES = new Set(Object.keys(CLASS_DISPLAY_NAMES).map(k => k.toLowerCase()));
 
 const DURATION  = 35;
 const ACTION_AT = 10; // when timeRemaining hits this, phase 1 ends → action phase
@@ -102,36 +102,30 @@ function phase1Conformity(
 
 // ── Helper: phase 2 action result (diff snap1→snap2) ─────────────────────────
 type DetectionStatus =
-  | { code: 'C1' | 'C2'; ok: true;  message: string }
-  | { code: 'E1' | 'E2' | 'E3' | 'E4' | 'E6' | 'S1'; ok: false; message: string; canRetry: boolean };
+  | { code: 'C1' | 'C2'; ok: true; message: string }
+  | { code: 'E1'; ok: false; message: string; canRetry: boolean; wrongToolName: string }
+  | { code: 'E2' | 'E3' | 'E4' | 'E6'; ok: false; message: string; canRetry: boolean };
 
 function phase2Status(
   snap1Names: string[],
   snap2Names: string[],
-  rawSnap2: Detection[],
   toolName: string,
   action: 'borrow' | 'return',
 ): DetectionStatus {
-  const hasUnknown = rawSnap2.some(d => !KNOWN_CLASSES.has(d.class.toLowerCase()));
-  if (hasUnknown)
-    return { code: 'S1', ok: false, message: 'Objet non référencé détecté. Opération bloquée.', canRetry: false };
-
   if (action === 'borrow') {
-    // Delta = what disappeared between phase 1 and phase 2 → tool was taken
-    const taken = snap1Names.filter(s => !snap2Names.some(s2 => normalize(s2) === normalize(s)));
+    const taken      = snap1Names.filter(s => !snap2Names.some(s2 => normalize(s2) === normalize(s)));
     const targetTaken = taken.some(s => normalize(s) === normalize(toolName));
     const wrongTaken  = taken.filter(s => normalize(s) !== normalize(toolName));
 
     if (wrongTaken.length > 0 && targetTaken)
       return { code: 'E3', ok: false, message: `Plusieurs outils pris simultanément : ${taken.join(', ')}.`, canRetry: true };
     if (wrongTaken.length > 0 && !targetTaken)
-      return { code: 'E1', ok: false, message: `Mauvais outil pris : "${wrongTaken[0]}" au lieu de "${toolName}".`, canRetry: true };
+      return { code: 'E1', ok: false, message: `Mauvais outil pris : "${wrongTaken[0]}" au lieu de "${toolName}".`, canRetry: true, wrongToolName: wrongTaken[0] };
     if (!targetTaken)
       return { code: 'E2', ok: false, message: `"${toolName}" n'a pas été retiré du tiroir.`, canRetry: false };
     return { code: 'C1', ok: true, message: `"${toolName}" a bien été pris. Emprunt confirmé.` };
   } else {
-    // Delta = what appeared between phase 1 and phase 2 → tool was returned
-    const returned      = snap2Names.filter(s => !snap1Names.some(s1 => normalize(s1) === normalize(s)));
+    const returned       = snap2Names.filter(s => !snap1Names.some(s1 => normalize(s1) === normalize(s)));
     const targetReturned = returned.some(s => normalize(s) === normalize(toolName));
     const wrongReturned  = returned.filter(s => normalize(s) !== normalize(toolName));
 
@@ -150,7 +144,7 @@ const CAPTURE_W = 640;
 const CAPTURE_H = 360;
 
 const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
-  toolName, drawerId, action = 'borrow', onDetectionSuccess, onDetectionFailure, onRetry,
+  toolName, drawerId, action = 'borrow', onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative,
 }) => {
   const videoRef   = useRef<HTMLVideoElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
@@ -158,6 +152,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const isRunningRef      = useRef(true);
   const lastDetectionsRef = useRef<Detection[]>([]);
   const snapshot1SavedRef = useRef(false);
+  const snapshot2Ref      = useRef<Detection[]>([]);
 
   const [phase,          setPhase]          = useState<Phase>('detecting');
   const [timeRemaining,  setTimeRemaining]  = useState(DURATION);
@@ -187,11 +182,11 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
       .finally(() => setLoadingDrawer(false));
   }, [drawerId]);
 
-  // ── Save snapshot at phase boundary (timeRemaining === ACTION_AT) ──────────
+  // ── Freeze snapshot1 when phase 2 starts (continuously updated during phase 1 by detection loop) ──
   useEffect(() => {
     if (timeRemaining === ACTION_AT && !snapshot1SavedRef.current) {
       snapshot1SavedRef.current = true;
-      setSnapshot1([...lastDetectionsRef.current]);
+      // snapshot1 already up-to-date from the detection loop; nothing to do here
     }
   }, [timeRemaining]);
 
@@ -203,9 +198,10 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     }
   }, []);
 
-  // ── Timer end: stop camera + go to comparison screen ──────────────────────
+  // ── Timer end: capture snap2 explicitly, then show comparison ───────────────
   const onTimerEnd = useCallback(() => {
     isRunningRef.current = false;
+    snapshot2Ref.current = [...lastDetectionsRef.current]; // freeze snap2 at t=0
     stopCamera();
     if (!drawerId) { onDetectionSuccess(); return; }
     setPhase('comparing');
@@ -222,16 +218,26 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     return () => clearInterval(timer);
   }, [onTimerEnd]);
 
-  // ── Start camera ──────────────────────────────────────────────────────────
+  // ── Start camera (rear on mobile, any camera on desktop) ─────────────────
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-    }).then(stream => {
-      if (videoRef.current) videoRef.current.srcObject = stream;
-    }).catch(() => {
-      setError("Impossible d'accéder à la caméra. Vérifiez les permissions.");
-      isRunningRef.current = false;
-    });
+    const start = async () => {
+      let stream: MediaStream | null = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+      } catch {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        } catch {
+          setError("Impossible d'accéder à la caméra. Vérifiez les permissions.");
+          isRunningRef.current = false;
+          return;
+        }
+      }
+      if (videoRef.current && stream) videoRef.current.srcObject = stream;
+    };
+    start();
     return () => stopCamera();
   }, [stopCamera]);
 
@@ -259,7 +265,13 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
             const result: DetectionResult = await resp.json();
             if (result.success) {
               if (result.annotated_image) setAnnotatedImage(result.annotated_image);
-              if (result.detections)      setDetections(result.detections);
+              if (result.detections) {
+                setDetections(result.detections);
+                // Continuously update snap1 during phase 1 (frozen when snapshot1SavedRef = true)
+                if (!snapshot1SavedRef.current && result.detections.length > 0) {
+                  setSnapshot1([...result.detections]);
+                }
+              }
               setServerReady(true);
             } else if (result.error?.includes('démarrage')) {
               await sleep(1000);
@@ -283,11 +295,12 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         drawerTools={drawerTools}
         loadingDrawer={loadingDrawer}
         snapshot1={snapshot1}
-        snapshot2={lastDetectionsRef.current}
+        snapshot2={snapshot2Ref.current}
         annotatedImage={annotatedImage}
         onConfirm={() => { setPhase('confirming'); onDetectionSuccess(); }}
         onCancel={() => onDetectionFailure("Validation annulée par l'utilisateur.")}
         onRetry={onRetry}
+        onBorrowAlternative={onBorrowAlternative}
       />
     );
   }
@@ -580,6 +593,7 @@ interface ComparisonProps {
   onConfirm: () => void;
   onCancel: () => void;
   onRetry: () => void;
+  onBorrowAlternative?: (wrongToolName: string) => void;
 }
 
 const statusConfig: Record<string, { bg: string; border: string; icon: React.ReactNode; label: string }> = {
@@ -590,19 +604,18 @@ const statusConfig: Record<string, { bg: string; border: string; icon: React.Rea
   E3: { bg: 'bg-red-50',    border: 'border-red-400',    icon: <X className="w-5 h-5 text-red-600" />,               label: 'E3 — Plusieurs outils pris' },
   E4: { bg: 'bg-red-50',    border: 'border-red-400',    icon: <X className="w-5 h-5 text-red-600" />,               label: 'E4 — Mauvais outil retourné' },
   E6: { bg: 'bg-red-50',    border: 'border-red-400',    icon: <X className="w-5 h-5 text-red-600" />,               label: 'E6 — Outil non retourné' },
-  S1: { bg: 'bg-yellow-50', border: 'border-yellow-400', icon: <ShieldAlert className="w-5 h-5 text-yellow-600" />, label: 'S1 — Objet non référencé' },
 };
 
 const ComparisonScreen: React.FC<ComparisonProps> = ({
   drawerId, toolName, action, drawerTools, loadingDrawer,
   snapshot1, snapshot2, annotatedImage,
-  onConfirm, onCancel, onRetry,
+  onConfirm, onCancel, onRetry, onBorrowAlternative,
 }) => {
   const snap1Names = toDisplayNames(snapshot1);
   const snap2Names = toDisplayNames(snapshot2);
 
   const p1 = phase1Conformity(snap1Names, drawerTools, toolName, action);
-  const p2 = phase2Status(snap1Names, snap2Names, snapshot2, toolName, action);
+  const p2 = phase2Status(snap1Names, snap2Names, toolName, action);
   const cfg = statusConfig[p2.code];
 
   const validateLabel = action === 'return' ? 'Valider le retour' : "Valider l'emprunt";
@@ -775,23 +788,54 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
               </div>
 
               {/* Buttons */}
-              <div className="flex gap-4">
-                <button onClick={onCancel}
-                  className="flex-1 py-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold transition-colors flex items-center justify-center gap-2">
-                  <X className="w-5 h-5" /> Annuler
-                </button>
-                {!p2.ok && p2.canRetry && (
+              {p2.code === 'E1' ? (
+                /* ── E1: mauvais outil pris → deux options ── */
+                <div className="space-y-3">
+                  <p className="text-center text-sm font-semibold text-slate-700 mb-1">
+                    Que souhaitez-vous faire ?
+                  </p>
+
+                  {/* Option 1 — Retourner l'outil incorrect et réessayer */}
                   <button onClick={onRetry}
-                    className="flex-1 py-4 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold transition-colors flex items-center justify-center gap-2 shadow">
-                    <RefreshCw className="w-5 h-5" /> Réessayer
+                    className="w-full py-4 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold transition-colors flex items-center justify-center gap-2 shadow">
+                    <RefreshCw className="w-5 h-5" />
+                    Remettre "{p2.wrongToolName}" dans le tiroir et réessayer
                   </button>
-                )}
-                <button onClick={onConfirm} disabled={!p2.ok}
-                  className={`flex-1 py-4 rounded-xl font-bold transition-colors flex items-center justify-center gap-2 shadow-lg
-                    ${p2.ok ? 'bg-[#0f2b56] hover:bg-[#0a1f3d] text-white cursor-pointer' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
-                  <Check className="w-5 h-5" /> {validateLabel}
-                </button>
-              </div>
+
+                  {/* Option 2 — Emprunter l'outil pris à la place */}
+                  {onBorrowAlternative && (
+                    <button onClick={() => onBorrowAlternative(p2.wrongToolName)}
+                      className="w-full py-4 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold transition-colors flex items-center justify-center gap-2 shadow">
+                      <Check className="w-5 h-5" />
+                      Emprunter "{p2.wrongToolName}" à la place
+                    </button>
+                  )}
+
+                  {/* Annuler */}
+                  <button onClick={onCancel}
+                    className="w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition-colors flex items-center justify-center gap-2">
+                    <X className="w-4 h-4" /> Annuler l'emprunt
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-4">
+                  <button onClick={onCancel}
+                    className="flex-1 py-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold transition-colors flex items-center justify-center gap-2">
+                    <X className="w-5 h-5" /> Annuler
+                  </button>
+                  {!p2.ok && p2.canRetry && (
+                    <button onClick={onRetry}
+                      className="flex-1 py-4 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold transition-colors flex items-center justify-center gap-2 shadow">
+                      <RefreshCw className="w-5 h-5" /> Réessayer
+                    </button>
+                  )}
+                  <button onClick={onConfirm} disabled={!p2.ok}
+                    className={`flex-1 py-4 rounded-xl font-bold transition-colors flex items-center justify-center gap-2 shadow-lg
+                      ${p2.ok ? 'bg-[#0f2b56] hover:bg-[#0a1f3d] text-white cursor-pointer' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+                    <Check className="w-5 h-5" /> {validateLabel}
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>

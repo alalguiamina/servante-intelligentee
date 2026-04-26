@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Loader, CheckCircle, AlertCircle, Package } from 'lucide-react';
+import { ArrowLeft, Loader, CheckCircle, AlertCircle } from 'lucide-react';
 import { borrowsAPI } from '../services/api';
 import { useTranslation } from 'react-i18next';
 import ProductValidation from './ProductValidation';
@@ -35,8 +35,7 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
   const [activeBorrows, setActiveBorrows] = useState<Borrow[]>([]);
   const [selectedBorrow, setSelectedBorrow] = useState<Borrow | null>(null);
   const [loading, setLoading] = useState(true);
-  const [returning] = useState(false);
-  const [status, setStatus] = useState<'list' | 'opening-drawer' | 'returning' | 'validating' | 'closing' | 'success' | 'error'>('list');
+  const [status, setStatus] = useState<'list' | 'validating' | 'closing' | 'success' | 'error'>('list');
   const [errorMessage, setErrorMessage] = useState('');
 
   // Tool name translation map
@@ -151,34 +150,18 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     loadBorrows();
   }, [currentUser]);
 
-  const handleSelectBorrow = async (borrow: Borrow) => {
+  const handleSelectBorrow = (borrow: Borrow) => {
     setSelectedBorrow(borrow);
-    setStatus('opening-drawer');
-    
-    // Open the drawer
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/hardware/drawer/open`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          drawerNumber: borrow.tool.drawer?.toString(),
-        }),
-      });
-      
-      if (response.ok) {
-        console.log(`✅ Drawer ${borrow.tool.drawer} opened`);
-      } else {
-        console.error('Failed to open drawer');
-      }
-    } catch (error) {
-      console.error('Error opening drawer:', error);
-    }
-  };
 
-  const handleCompleteReturn = () => {
-    // Lancer la validation YOLO avant de fermer le tiroir
+    // Open drawer fire-and-forget, go straight to YOLO validation
+    if (borrow.tool.drawer && ['1', '2', '3', '4'].includes(borrow.tool.drawer)) {
+      fetch(`${import.meta.env.VITE_API_URL}/hardware/drawer/open`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ drawerNumber: borrow.tool.drawer }),
+      }).catch(() => console.warn('⚠️ Tiroir non disponible'));
+    }
+
     setStatus('validating');
   };
 
@@ -238,8 +221,7 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
   };
 
   const handleRetry = () => {
-    // Réessayer = garder le tiroir ouvert et revenir aux instructions
-    setStatus('returning');
+    setStatus('validating');
   };
 
   // LOADING
@@ -328,96 +310,6 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     );
   }
 
-  // DRAWER OPENED - RETURNING TOOL
-  if ((status === 'opening-drawer' || status === 'returning') && selectedBorrow) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-blue-50 via-indigo-50 to-blue-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-2xl">
-          {/* Header */}
-          <div className="text-center mb-12 space-y-2">
-            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-green-400 via-emerald-400 to-green-600 flex items-center justify-center mx-auto shadow-2xl animate-pulse">
-              <Package className="w-16 h-16 text-white" />
-            </div>
-            
-            <h1 className="text-5xl font-bold text-gray-900 mb-3">
-              {t('drawerIsOpen', { drawer: selectedBorrow.tool.drawer })}
-            </h1>
-            <p className="text-2xl text-gray-600 font-medium">{t('pleaseReturnYourTool')}</p>
-          </div>
-
-          {/* Tool Info */}
-          <div className="bg-gradient-to-br from-white to-blue-50 rounded-2xl p-8 shadow-lg mb-8 border border-blue-100 card-glass">
-            <div className="flex gap-6 items-start">
-              {selectedBorrow.tool.image && (
-                <img 
-                  src={selectedBorrow.tool.image} 
-                  alt={selectedBorrow.tool.name}
-                  className="w-28 h-28 object-cover rounded-xl shadow-md border-2 border-white hover:scale-105 transition-transform"
-                />
-              )}
-              <div className="flex-1 space-y-3">
-                <h3 className="text-3xl font-bold text-gray-900">{getTranslatedToolName(selectedBorrow.tool.name)}</h3>
-                <div className="space-y-2">
-                  <p className="text-lg text-gray-600">
-                    <span className="text-gray-500">{t('category')}:</span> <span className="font-semibold text-gray-900">{getTranslatedCategoryName(selectedBorrow.tool.category)}</span>
-                  </p>
-                  <p className="text-lg text-gray-600">
-                    <span className="text-gray-500">{t('drawer')}:</span> <span className="font-bold text-blue-600 text-xl">{getDrawerNumber(selectedBorrow.tool.drawer)}</span>
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Instructions */}
-          <div className="space-y-4 mb-8">
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border-l-4 border-blue-600 shadow-md hover:shadow-lg transition-shadow">
-              <div className="flex gap-5 items-start">
-                <div className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold flex-shrink-0 text-lg shadow-lg">
-                  1
-                </div>
-                <div>
-                  <h4 className="text-lg font-bold text-gray-900 mb-1">{t('placeToolInDrawer')}</h4>
-                  <p className="text-gray-600">{t('placeToolInDrawerDesc', { drawer: getDrawerNumber(selectedBorrow.tool.drawer) })}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-6 border-l-4 border-green-600 shadow-md hover:shadow-lg transition-shadow">
-              <div className="flex gap-5 items-start">
-                <div className="w-12 h-12 rounded-full bg-green-600 text-white flex items-center justify-center font-bold flex-shrink-0 text-lg shadow-lg">
-                  2
-                </div>
-                <div>
-                  <h4 className="text-lg font-bold text-gray-900 mb-1">{t('closeTheDrawer')}</h4>
-                  <p className="text-gray-600">{t('clickButtonWhenDone')}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Close Button */}
-          <button
-            onClick={handleCompleteReturn}
-            disabled={returning}
-            className="w-full py-4 rounded-xl bg-gradient-to-r from-green-500 via-emerald-500 to-green-600 text-white font-bold text-lg hover:from-green-600 hover:via-emerald-600 hover:to-green-700 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 active:scale-95"
-          >
-            {returning ? (
-              <>
-                <Loader className="w-6 h-6 animate-spin" />
-                <span>{t('closingDrawer')}</span>
-              </>
-            ) : (
-              <>
-                <CheckCircle className="w-6 h-6" />
-                <span>{t('closeDrawerFinish')}</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   // NO ITEMS
   if (activeBorrows.length === 0) {

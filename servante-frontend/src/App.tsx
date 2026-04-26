@@ -2329,64 +2329,34 @@ export default function App() {
         setLoading(true);
 
         if (isReturnMode) {
-          // ✅ MODE RETOUR - Ouvrir le tiroir d'abord, puis marquer comme retourné après fermeture
+          // ✅ MODE RETOUR — trouver l'emprunt actif
+          const activeBorrow = allBorrows.find(
+            b => b.toolId === selectedTool.id &&
+              b.userName === currentUser.fullName &&
+              (b.status === 'active' || b.status === 'overdue')
+          );
+          if (!activeBorrow) {
+            alert(`❌ ${t('noBorrowFound')}`);
+            return;
+          }
+          setActiveBorrowId(activeBorrow.id);
+
           if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
-            try {
-              console.log(`🔓 Ouverture du tiroir ${selectedTool.drawer} pour retour de ${selectedTool.name}...`);
-              const drawerResult = await hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4');
-              if (drawerResult.success) {
-                setCurrentScreen('drawer-open');
-              } else {
-                // Fallback si le tiroir ne s'ouvre pas
-                const activeBorrow = allBorrows.find(
-                  b => b.toolId === selectedTool.id &&
-                    b.userName === currentUser.fullName &&
-                    (b.status === 'active' || b.status === 'overdue')
-                );
-                if (activeBorrow) {
-                  await borrowsAPI.markAsReturned(activeBorrow.id);
-                }
-                alert(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('returnSuccess')}!`);
-                await loadBorrowsFromBackend();
-                await loadToolsFromBackend();
-                setSelectedTool(null);
-                setIsReturnMode(false);
-                setCurrentScreen('tool-selection');
-              }
-            } catch (error) {
-              console.warn('⚠️ Moteurs non disponibles:', error);
-              const activeBorrow = allBorrows.find(
-                b => b.toolId === selectedTool.id &&
-                  b.userName === currentUser.fullName &&
-                  (b.status === 'active' || b.status === 'overdue')
-              );
-              if (activeBorrow) {
-                await borrowsAPI.markAsReturned(activeBorrow.id);
-              }
-              alert(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('returnSuccess')}!`);
-              await loadBorrowsFromBackend();
-              await loadToolsFromBackend();
-              setSelectedTool(null);
-              setIsReturnMode(false);
-              setCurrentScreen('tool-selection');
-            }
+            // Ouvrir le tiroir et lancer la détection YOLO
+            // Le retour est enregistré en DB SEULEMENT après validation YOLO réussie
+            hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
+              console.warn('⚠️ Tiroir non disponible');
+            });
+            setCurrentScreen('product-validation');
           } else {
-            // Pas de tiroir assigné - retour direct
-            const activeBorrow = allBorrows.find(
-              b => b.toolId === selectedTool.id &&
-                b.userName === currentUser.fullName &&
-                (b.status === 'active' || b.status === 'overdue')
-            );
-            if (!activeBorrow) {
-              alert(`❌ ${t('noBorrowFound')}`);
-              return;
-            }
+            // Pas de tiroir assigné — retour direct sans YOLO
             const result = await borrowsAPI.markAsReturned(activeBorrow.id);
             if (result.success) {
-              alert(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('returnSuccess')}!`);
+              showToast(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('returnSuccess')}!`, 'success', 3000);
               await loadBorrowsFromBackend();
               await loadToolsFromBackend();
               setSelectedTool(null);
+              setActiveBorrowId(null);
               setIsReturnMode(false);
               setCurrentScreen('tool-selection');
             } else {
@@ -2394,27 +2364,14 @@ export default function App() {
             }
           }
         } else {
-          // ✅ MODE EMPRUNT — créer l'emprunt, ouvrir le tiroir en arrière-plan,
-          // puis afficher DIRECTEMENT la caméra YOLO pour 15 secondes
-          const result = await borrowsAPI.borrow(currentUser.id, selectedTool.id, 1);
-
-          if (result.success) {
-            // Stocker l'ID de l'emprunt (retourné par le backend dans result.data.id)
-            const newBorrowId: string | null = result.data?.id ?? null;
-            setActiveBorrowId(newBorrowId);
-
-            // Ouvrir le tiroir en arrière-plan sans bloquer l'affichage de la caméra
-            if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
-              hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
-                console.warn('⚠️ Tiroir non disponible');
-              });
-            }
-
-            // Aller directement à la détection YOLO (caméra en temps réel)
-            setCurrentScreen('product-validation');
-          } else {
-            alert(`❌ ${t('borrowError')}`);
+          // ✅ MODE EMPRUNT — ouvrir le tiroir puis lancer la détection YOLO
+          // L'emprunt est enregistré en DB SEULEMENT après validation YOLO réussie
+          if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
+            hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
+              console.warn('⚠️ Tiroir non disponible');
+            });
           }
+          setCurrentScreen('product-validation');
         }
       } catch (error: any) {
         console.error('❌ Erreur:', error);
@@ -4534,6 +4491,18 @@ export default function App() {
   // ÉCRAN - VALIDATION PRODUIT IA
   // ============================================
   if (currentScreen === 'product-validation' && selectedTool) {
+    const closeDrawer = () => {
+      if (selectedTool?.drawer && ['1','2','3','4'].includes(selectedTool.drawer)) {
+        hardwareAPI.closeDrawer(selectedTool.drawer as '1'|'2'|'3'|'4').catch(() => {});
+      }
+    };
+    const resetValidation = () => {
+      setSelectedTool(null);
+      setActiveBorrowId(null);
+      setValidationRequired(false);
+      setIsReturnMode(false);
+    };
+
     return (
       <ProductValidation
         toolName={selectedTool.name}
@@ -4542,60 +4511,62 @@ export default function App() {
         action={isReturnMode ? 'return' : 'borrow'}
         onValidationSuccess={async () => {
           if (isReturnMode && activeBorrowId) {
+            // Retour : enregistrer en DB maintenant que la validation est confirmée
             await borrowsAPI.markAsReturned(activeBorrowId);
             showToast('✅ Retour validé !', 'success', 3000);
           } else {
-            showToast('✅ Emprunt confirmé !', 'success', 3000);
+            // Emprunt : créer l'enregistrement DB maintenant que l'outil est confirmé
+            const result = await borrowsAPI.borrow(currentUser!.id, selectedTool.id, 1);
+            if (result.success) {
+              showToast('✅ Emprunt confirmé !', 'success', 3000);
+            } else {
+              showToast(`❌ ${t('borrowError')}`, 'error', 3000);
+            }
           }
-          setSelectedTool(null);
-          setActiveBorrowId(null);
-          setValidationRequired(false);
-          setIsReturnMode(false);
-          setCurrentScreen('tool-selection');
-          loadBorrowsFromBackend();
-          loadToolsFromBackend();
-        }}
-        onValidationFailure={async (reason) => {
-          // Annuler l'emprunt en DB (attendre la réponse avant de recharger)
-          if (!isReturnMode && activeBorrowId) {
-            await borrowsAPI.cancelBorrow(activeBorrowId).catch(() => {});
-          }
-          // Fermer le tiroir
-          if (selectedTool?.drawer && ['1','2','3','4'].includes(selectedTool.drawer)) {
-            hardwareAPI.closeDrawer(selectedTool.drawer as '1'|'2'|'3'|'4').catch(() => {});
-          }
-          showToast(`❌ ${reason}`, 'error', 3000);
-          setSelectedTool(null);
-          setActiveBorrowId(null);
-          setValidationRequired(false);
-          setIsReturnMode(false);
+          closeDrawer();
+          resetValidation();
           setCurrentScreen('tool-selection');
           await loadBorrowsFromBackend();
           await loadToolsFromBackend();
         }}
-        onRetry={async () => {
-          // Réessayer = annuler l'emprunt en DB (attendre avant de recharger)
-          if (!isReturnMode && activeBorrowId) {
-            await borrowsAPI.cancelBorrow(activeBorrowId).catch(() => {});
+        onValidationFailure={async (reason) => {
+          // Aucun emprunt à annuler — rien n'a été enregistré en DB
+          closeDrawer();
+          showToast(`❌ ${reason}`, 'error', 3000);
+          resetValidation();
+          setCurrentScreen('tool-selection');
+          await loadBorrowsFromBackend();
+          await loadToolsFromBackend();
+        }}
+        onRetry={() => {
+          // Relancer la détection YOLO sans fermer le tiroir
+          // (l'utilisateur doit remettre l'outil incorrect et réessayer)
+          setCurrentScreen('product-validation');
+        }}
+        onBorrowAlternative={async (wrongToolName: string) => {
+          // L'utilisateur a pris un autre outil et veut l'emprunter à la place
+          const wrongTool = tools.find(
+            t => t.name.toLowerCase().trim() === wrongToolName.toLowerCase().trim()
+          );
+          if (!wrongTool || wrongTool.availableQuantity <= 0) {
+            showToast('Cet outil n\'est pas disponible', 'error', 3000);
+            return;
           }
-          if (selectedTool?.drawer && ['1','2','3','4'].includes(selectedTool.drawer)) {
-            hardwareAPI.closeDrawer(selectedTool.drawer as '1'|'2'|'3'|'4').catch(() => {});
+          const result = await borrowsAPI.borrow(currentUser!.id, wrongTool.id, 1);
+          if (result.success) {
+            showToast(`✅ Emprunt de "${wrongToolName}" confirmé !`, 'success', 3000);
+          } else {
+            showToast(`❌ ${t('borrowError')}`, 'error', 3000);
           }
-          showToast('Réessayez depuis la sélection d\'outil.', 'info', 2000);
-          setSelectedTool(null);
-          setActiveBorrowId(null);
-          setValidationRequired(false);
-          setIsReturnMode(false);
+          closeDrawer();
+          resetValidation();
           setCurrentScreen('tool-selection');
           await loadBorrowsFromBackend();
           await loadToolsFromBackend();
         }}
         onSkip={() => {
-          showToast('Validation ignorée', 'info', 2000);
-          setSelectedTool(null);
-          setActiveBorrowId(null);
-          setValidationRequired(false);
-          setIsReturnMode(false);
+          closeDrawer();
+          resetValidation();
           setCurrentScreen('tool-selection');
         }}
       />
