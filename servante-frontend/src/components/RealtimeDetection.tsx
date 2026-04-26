@@ -155,7 +155,8 @@ const CAPTURE_H = 360;
 const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   toolName, drawerId, action = 'borrow', isRetry = false, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative,
 }) => {
-  const totalDuration = isRetry ? RETRY_DURATION : DURATION;
+  // Shorter timer only for borrow retries (quick re-pick); returns always need full time
+  const totalDuration = (isRetry && action === 'borrow') ? RETRY_DURATION : DURATION;
   const videoRef   = useRef<HTMLVideoElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
 
@@ -334,20 +335,22 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
             if (result.success) {
               if (result.annotated_image) setAnnotatedImage(result.annotated_image);
               if (result.detections) {
+                // Strip hand detections — "main" is never a borrowable tool
+                const toolDets = result.detections.filter(d => d.class.toLowerCase() !== 'main');
                 // Update ref directly (no React render delay) so onTimerEnd always gets latest
-                lastDetectionsRef.current = result.detections;
-                setDetections(result.detections);
+                lastDetectionsRef.current = toolDets;
+                setDetections(toolDets);
                 // Phase 1: keep best snapshot (most tools = drawer fully visible)
-                if (!snapshot1SavedRef.current && result.detections.length > 0) {
-                  if (result.detections.length >= bestSnapshot1Ref.current.length) {
-                    bestSnapshot1Ref.current = [...result.detections];
-                    setSnapshot1([...result.detections]);
+                if (!snapshot1SavedRef.current && toolDets.length > 0) {
+                  if (toolDets.length >= bestSnapshot1Ref.current.length) {
+                    bestSnapshot1Ref.current = [...toolDets];
+                    setSnapshot1([...toolDets]);
                   }
                 }
                 // Phase 2 return: keep best snapshot (most tools = returned tool appeared)
                 if (snapshot1SavedRef.current && actionRef.current === 'return') {
-                  if (result.detections.length >= bestSnapshot2Ref.current.length) {
-                    bestSnapshot2Ref.current = [...result.detections];
+                  if (toolDets.length >= bestSnapshot2Ref.current.length) {
+                    bestSnapshot2Ref.current = [...toolDets];
                   }
                 }
               }
@@ -355,7 +358,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
               // Auto-cancel: require 4 consecutive frames detecting the wrong tool back in drawer
               // to avoid triggering on a hand passing in front of the camera
               if (cancelPendingToolRef.current) {
-                const detected = toDisplayNames(result.detections ?? []);
+                const detected = toDisplayNames(lastDetectionsRef.current);
                 const toolSeen = detected.some(d => normalize(d) === normalize(cancelPendingToolRef.current!));
                 if (toolSeen) {
                   returnConfirmCountRef.current += 1;
@@ -570,7 +573,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const matchTarget = detectedNames.some(d => normalize(d) === normalize(toolName));
 
   const actionPrompt = action === 'return'
-    ? "Veuillez retourner l'outil maintenant"
+    ? "Replacez l'outil dans le tiroir, puis retirez votre main"
     : "Veuillez prendre l'outil maintenant";
 
   return (

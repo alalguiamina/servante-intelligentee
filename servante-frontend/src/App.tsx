@@ -85,6 +85,7 @@ import BadgeScanner from './components/BadgeScanner';
 import ReturnTool from './components/ReturnTool';
 import ProductValidation from './components/ProductValidation';
 import DrawerClosingGuard from './components/DrawerClosingGuard';
+import DrawerOpeningGuard from './components/DrawerOpeningGuard';
 
 // ============================================
 // IMPORTS - API Backend
@@ -181,6 +182,7 @@ type Screen =
   | 'tool-selection'
   | 'confirm-borrow'
   | 'drawer-open'
+  | 'drawer-opening-guard'
   | 'product-validation'
   | 'admin-login'
   | 'user-login'
@@ -2350,7 +2352,9 @@ export default function App() {
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
               console.warn('⚠️ Tiroir non disponible');
             });
-            setCurrentScreen('product-validation');
+            setDetectionRetryKey(0);
+            setGuardDrawerId(selectedTool.drawer as '1' | '2' | '3' | '4');
+            setCurrentScreen('drawer-opening-guard');
           } else {
             // Pas de tiroir assigné — retour direct sans YOLO
             const result = await borrowsAPI.markAsReturned(activeBorrow.id);
@@ -2373,8 +2377,10 @@ export default function App() {
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
               console.warn('⚠️ Tiroir non disponible');
             });
+            setGuardDrawerId(selectedTool.drawer as '1' | '2' | '3' | '4');
           }
-          setCurrentScreen('product-validation');
+          setDetectionRetryKey(0);
+          setCurrentScreen('drawer-opening-guard');
         }
       } catch (error: any) {
         console.error('❌ Erreur:', error);
@@ -2547,6 +2553,7 @@ export default function App() {
             // Stocker l'emprunt et laisser YOLO valider avant de confirmer le retour
             setActiveBorrowId(activeBorrow.id);
             setDrawerScanResult(null);
+            setDetectionRetryKey(0);
             setCurrentScreen('product-validation');
           } else {
             setSelectedTool(null);
@@ -2564,6 +2571,7 @@ export default function App() {
             setActiveBorrowId(activeBorrow.id);
             setValidationRequired(true);
             setDrawerScanResult(null);
+            setDetectionRetryKey(0);
             setCurrentScreen('product-validation');
           } else {
             setSelectedTool(null);
@@ -4540,11 +4548,15 @@ export default function App() {
           await loadToolsFromBackend();
         }}
         onValidationFailure={async (reason) => {
-          // Aucun emprunt à annuler — rien n'a été enregistré en DB
-          closeDrawer();
+          const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           showToast(`❌ ${reason}`, 'error', 3000);
           resetValidation();
-          setCurrentScreen('tool-selection');
+          if (dId && ['1','2','3','4'].includes(dId)) {
+            setGuardDrawerId(dId);
+            setCurrentScreen('drawer-closing-guard');
+          } else {
+            setCurrentScreen('tool-selection');
+          }
           await loadBorrowsFromBackend();
           await loadToolsFromBackend();
         }}
@@ -4566,16 +4578,40 @@ export default function App() {
           } else {
             showToast(`❌ ${t('borrowError')}`, 'error', 3000);
           }
-          closeDrawer();
+          const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           resetValidation();
-          setCurrentScreen('tool-selection');
+          if (dId && ['1','2','3','4'].includes(dId)) {
+            setGuardDrawerId(dId);
+            setCurrentScreen('drawer-closing-guard');
+          } else {
+            setCurrentScreen('tool-selection');
+          }
           await loadBorrowsFromBackend();
           await loadToolsFromBackend();
         }}
         onSkip={() => {
-          closeDrawer();
+          const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           resetValidation();
-          setCurrentScreen('tool-selection');
+          if (dId && ['1','2','3','4'].includes(dId)) {
+            setGuardDrawerId(dId);
+            setCurrentScreen('drawer-closing-guard');
+          } else {
+            setCurrentScreen('tool-selection');
+          }
+        }}
+      />
+    );
+  }
+
+  // ============================================
+  // ÉCRAN - SURVEILLANCE OUVERTURE TIROIR
+  // ============================================
+  if (currentScreen === 'drawer-opening-guard' && guardDrawerId) {
+    return (
+      <DrawerOpeningGuard
+        drawerId={guardDrawerId}
+        onComplete={() => {
+          setCurrentScreen('product-validation');
         }}
       />
     );

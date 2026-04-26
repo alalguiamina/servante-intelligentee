@@ -56,13 +56,14 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const videoRef   = useRef<HTMLVideoElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
 
-  const isRunningRef     = useRef(true);
-  const phaseRef         = useRef<GuardPhase>('monitoring');
-  const handCountRef     = useRef(0);
-  const clearCountRef    = useRef(0);
-  const lastCleanSnapRef = useRef<string[]>([]); // tool classes of last clean frame (no hand)
-  const stolenRef        = useRef<string[]>([]);
-  const timerPausedRef   = useRef(false);
+  const isRunningRef        = useRef(true);
+  const phaseRef            = useRef<GuardPhase>('monitoring');
+  const handCountRef        = useRef(0);
+  const clearCountRef       = useRef(0);
+  const bestPreHandSnapRef  = useRef<string[]>([]); // best (max-tools) frame seen before hand appeared
+  const missingCountRef     = useRef<Record<string, number>>({}); // per-tool absence count across clear frames
+  const stolenRef           = useRef<string[]>([]);
+  const timerPausedRef      = useRef(false);
 
   const [phase,          setPhase]          = useState<GuardPhase>('monitoring');
   const [cameraReady,    setCameraReady]    = useState(false);
@@ -177,15 +178,17 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
               handCountRef.current += 1;
               if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
                 handCountRef.current = 0;
-                // Stop motor immediately
+                missingCountRef.current = {}; // reset absence counters for the coming clear phase
                 hardwareAPI.stopMotors().catch(() => {});
                 phaseRef.current = 'hand-detected';
                 setPhase('hand-detected');
               }
             } else {
               handCountRef.current = 0;
-              // Keep updating clean reference while no hand present
-              lastCleanSnapRef.current = toolClasses;
+              // Keep best (most tools) pre-hand snapshot
+              if (toolClasses.length >= bestPreHandSnapRef.current.length) {
+                bestPreHandSnapRef.current = [...toolClasses];
+              }
             }
           }
 
@@ -193,12 +196,23 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
           else if (cur === 'hand-detected') {
             if (!hasHand) {
               clearCountRef.current += 1;
+
+              // Majority-vote: count how many clear frames each pre-hand tool is absent
+              bestPreHandSnapRef.current.forEach(cls => {
+                const present = toolClasses.some(c => c.toLowerCase() === cls.toLowerCase());
+                if (!present) {
+                  missingCountRef.current[cls] = (missingCountRef.current[cls] ?? 0) + 1;
+                }
+              });
+
               if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
                 clearCountRef.current = 0;
-                // Compare pre-hand snapshot vs current state
-                const stolen = lastCleanSnapRef.current.filter(
-                  cls => !toolClasses.some(c => c.toLowerCase() === cls.toLowerCase())
+                const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2); // absent in ≥ half the frames
+                const stolen = bestPreHandSnapRef.current.filter(
+                  cls => (missingCountRef.current[cls] ?? 0) >= threshold
                 );
+                missingCountRef.current = {}; // reset for next hand event
+
                 if (stolen.length > 0) {
                   stolenRef.current = stolen;
                   setStolenTools(stolen);
@@ -227,8 +241,9 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                 clearCountRef.current = 0;
                 stolenRef.current = [];
                 setStolenTools([]);
-                // Update clean snap and resume closing
-                lastCleanSnapRef.current = toolClasses;
+                // Reset best snapshot to current state (tool returned) and resume closing
+                bestPreHandSnapRef.current = [...toolClasses];
+                missingCountRef.current = {};
                 hardwareAPI.closeDrawer(drawerId).catch(() => {});
                 phaseRef.current = 'monitoring';
                 setPhase('monitoring');
