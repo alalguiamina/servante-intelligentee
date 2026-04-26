@@ -38,9 +38,14 @@ interface DrawerTool {
 
 // ── Mapping noms modèle → noms d'affichage ────────────────────────────────
 const CLASS_DISPLAY_NAMES: Record<string, string> = {
+  'Cle 1':                 'Clé 1',
+  'Cle 2':                 'Clé 2',
+  'Cle 3':                 'Clé 3',
+  'Cle 4':                 'Clé 4',
+  'Cle 5':                 'Clé 5',
+  'Cle 6':                 'Clé 6',
   'Cle L petite':          'Clé L petite',
   'Cle L grande':          'Clé L grande',
-  'Cles plates':           'Lot de clés plates',
   'Denudeur automatique':  'Dénudeur automatique',
   'Grise coupante':        'Mini pince coupante',
   'Jaune coude':           'Pince à bec coudée',

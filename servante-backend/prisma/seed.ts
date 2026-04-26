@@ -31,9 +31,14 @@ async function main() {
   await prisma.tool.create({ data: { name: 'Mini pince à bec rond', categoryId: cat.id, imageUrl: '/images/Mini pince à bec ROND.jpg', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Pince à bec plat', categoryId: cat.id, imageUrl: '/images/pince à bec plat.jpg', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Pince à dénuder', categoryId: cat.id, imageUrl: '/images/PINCE A DENUDER.webp', size: 'Moyen', drawer: '1', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
+  await prisma.tool.create({ data: { name: 'Clé 1', categoryId: cat.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
+  await prisma.tool.create({ data: { name: 'Clé 2', categoryId: cat.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
+  await prisma.tool.create({ data: { name: 'Clé 3', categoryId: cat.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
+  await prisma.tool.create({ data: { name: 'Clé 4', categoryId: cat.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
+  await prisma.tool.create({ data: { name: 'Clé 5', categoryId: cat.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
+  await prisma.tool.create({ data: { name: 'Clé 6', categoryId: cat.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Clé L grande', categoryId: cat.id, imageUrl: '/images/cle L grande.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Clé L petite', categoryId: cat.id, imageUrl: '/images/cle L petite.webp', size: 'Moyen', drawer: '2', totalQuantity: 2, availableQuantity: 2, borrowedQuantity: 0 } });
-  await prisma.tool.create({ data: { name: 'Lot de clés plates', categoryId: cat.id, imageUrl: '/images/lot de cles plate.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Tournevis américain', categoryId: cat.id, imageUrl: '/images/Tournevis/tournevis-americain-moyen.jpg', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Tournevis plat', categoryId: cat.id, imageUrl: '/images/Tournevis/tournevis-plat-moyen.webp', size: 'Moyen', drawer: '2', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Dénudeur automatique', categoryId: cat.id, imageUrl: '/images/DENUDEUR AUTOMATIQUE.webp', size: 'Moyen', drawer: '3', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
@@ -46,7 +51,7 @@ async function main() {
   await prisma.tool.create({ data: { name: 'Perceuse', categoryId: cat.id, imageUrl: '/images/PERCEUSE.webp', size: 'Moyen', drawer: '4', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
   await prisma.tool.create({ data: { name: 'Pied à coulisse', categoryId: cat.id, imageUrl: '/images/PIED A COULISSE.jpg', size: 'Moyen', drawer: '4', totalQuantity: 1, availableQuantity: 1, borrowedQuantity: 0 } });
 
-  console.log('✅ 19 outil(s) créé(s) (tous disponibles)');
+  console.log('✅ 24 outil(s) créé(s) (tous disponibles)');
   console.log('🎉 Seed terminé avec succès !');
 }
 
