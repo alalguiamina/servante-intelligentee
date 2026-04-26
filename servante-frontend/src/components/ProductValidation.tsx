@@ -6,6 +6,7 @@ interface ProductValidationProps {
   borrowId: string;
   drawerId?: string;
   action?: 'borrow' | 'return';
+  isRetry?: boolean;
   onValidationSuccess: () => void;
   onValidationFailure: (reason: string) => void;
   onRetry?: () => void;
@@ -18,6 +19,7 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
   borrowId,
   drawerId,
   action = 'borrow',
+  isRetry = false,
   onValidationSuccess,
   onValidationFailure,
   onRetry,
@@ -29,6 +31,7 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
       borrowId={borrowId}
       drawerId={drawerId}
       action={action}
+      isRetry={isRetry}
       onDetectionSuccess={onValidationSuccess}
       onDetectionFailure={onValidationFailure}
       onRetry={onRetry ?? (() => onValidationFailure("Détection annulée — réessayez depuis la sélection d'outil."))}

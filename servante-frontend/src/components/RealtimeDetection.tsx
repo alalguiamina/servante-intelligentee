@@ -7,6 +7,7 @@ interface RealtimeDetectionProps {
   borrowId: string;
   drawerId?: string;
   action?: 'borrow' | 'return';
+  isRetry?: boolean;
   onDetectionSuccess: () => void;
   onDetectionFailure: (reason: string) => void;
   onRetry: () => void;
@@ -73,12 +74,15 @@ const normalize = (s: string) =>
   s.toLowerCase().trim().replace(/-/g, ' ').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 
-const DURATION  = 35;
-const ACTION_AT = 10; // when timeRemaining hits this, phase 1 ends → action phase
+const DURATION       = 35; // initial borrow/return
+const RETRY_DURATION = 20; // after wrong tool taken and retrying
+const ACTION_AT      = 10; // when timeRemaining hits this, phase 1 ends → action phase
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-type Phase = 'detecting' | 'comparing' | 'confirming';
+type Phase = 'detecting' | 'phase1-blocked' | 'comparing' | 'confirming' | 'return-wrong-tool';
+
+type P1Result = ReturnType<typeof phase1Conformity>;
 
 // ── Helper: phase 1 DB conformity ────────────────────────────────────────────
 function phase1Conformity(
@@ -144,30 +148,44 @@ const CAPTURE_W = 640;
 const CAPTURE_H = 360;
 
 const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
-  toolName, drawerId, action = 'borrow', onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative,
+  toolName, drawerId, action = 'borrow', isRetry = false, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative,
 }) => {
+  const totalDuration = isRetry ? RETRY_DURATION : DURATION;
   const videoRef   = useRef<HTMLVideoElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
 
-  const isRunningRef      = useRef(true);
-  const lastDetectionsRef = useRef<Detection[]>([]);
-  const snapshot1SavedRef = useRef(false);
-  const snapshot2Ref      = useRef<Detection[]>([]);
+  const isRunningRef         = useRef(true);
+  const lastDetectionsRef    = useRef<Detection[]>([]);
+  const snapshot1SavedRef    = useRef(false);
+  const bestSnapshot1Ref     = useRef<Detection[]>([]); // best frame during phase 1 (most tools)
+  const bestSnapshot2Ref     = useRef<Detection[]>([]); // best frame during phase 2 (for return: most tools = returned tool present)
+  const snapshot2Ref         = useRef<Detection[]>([]);
+  const timerPausedRef       = useRef(false);
+  const cancelPendingToolRef    = useRef<string | null>(null);
+  const returnConfirmCountRef   = useRef(0); // consecutive frames where wrong tool detected in drawer
+  const actionRef               = useRef(action);
 
-  const [phase,          setPhase]          = useState<Phase>('detecting');
-  const [timeRemaining,  setTimeRemaining]  = useState(DURATION);
-  const [detections,     setDetections]     = useState<Detection[]>([]);
-  const [snapshot1,      setSnapshot1]      = useState<Detection[]>([]);
-  const [annotatedImage, setAnnotatedImage] = useState<string | null>(null);
-  const [loading,        setLoading]        = useState(false);
-  const [cameraReady,    setCameraReady]    = useState(false);
-  const [serverReady,    setServerReady]    = useState(false);
-  const [error,          setError]          = useState<string | null>(null);
-  const [drawerTools,    setDrawerTools]    = useState<DrawerTool[]>([]);
-  const [loadingDrawer,  setLoadingDrawer]  = useState(false);
+  const [phase,             setPhase]             = useState<Phase>('detecting');
+  const [timeRemaining,     setTimeRemaining]     = useState(totalDuration);
+  const [detections,        setDetections]        = useState<Detection[]>([]);
+  const [snapshot1,         setSnapshot1]         = useState<Detection[]>([]);
+  const [annotatedImage,    setAnnotatedImage]    = useState<string | null>(null);
+  const [loading,           setLoading]           = useState(false);
+  const [cameraReady,       setCameraReady]       = useState(false);
+  const [serverReady,       setServerReady]       = useState(false);
+  const [error,             setError]             = useState<string | null>(null);
+  const [drawerTools,       setDrawerTools]       = useState<DrawerTool[]>([]);
+  const [loadingDrawer,     setLoadingDrawer]     = useState(false);
+  const [phase1Result,      setPhase1Result]      = useState<P1Result | null>(null);
+  const [cancelPendingTool, setCancelPendingTool] = useState<string | null>(null);
+  const [cameraRestartKey,  setCameraRestartKey]  = useState(0);
 
-  // Keep ref in sync
+  // Keep refs in sync — lastDetectionsRef is also updated directly in the loop to avoid React render delay
   useEffect(() => { lastDetectionsRef.current = detections; }, [detections]);
+  useEffect(() => { cancelPendingToolRef.current = cancelPendingTool; }, [cancelPendingTool]);
+  useEffect(() => { actionRef.current = action; }, [action]);
+  const serverReadyRef = useRef(false);
+  useEffect(() => { serverReadyRef.current = serverReady; }, [serverReady]);
 
   // ── Fetch drawer tools on mount (needed for live phase-1 indicator) ────────
   useEffect(() => {
@@ -182,14 +200,6 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
       .finally(() => setLoadingDrawer(false));
   }, [drawerId]);
 
-  // ── Freeze snapshot1 when phase 2 starts (continuously updated during phase 1 by detection loop) ──
-  useEffect(() => {
-    if (timeRemaining === ACTION_AT && !snapshot1SavedRef.current) {
-      snapshot1SavedRef.current = true;
-      // snapshot1 already up-to-date from the detection loop; nothing to do here
-    }
-  }, [timeRemaining]);
-
   // ── Stop camera ────────────────────────────────────────────────────────────
   const stopCamera = useCallback(() => {
     if (videoRef.current?.srcObject) {
@@ -198,10 +208,49 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     }
   }, []);
 
+  // ── Return wrong tool then cancel: restart camera and wait for detection ────
+  const handleReturnAndCancel = useCallback((wrongToolName: string) => {
+    cancelPendingToolRef.current = wrongToolName;
+    setCancelPendingTool(wrongToolName);
+    isRunningRef.current = true;
+    snapshot1SavedRef.current = true; // don't save snapshots in this mode
+    bestSnapshot1Ref.current = [];
+    bestSnapshot2Ref.current = [];
+    returnConfirmCountRef.current = 0;
+    timerPausedRef.current = false;
+    setDetections([]);
+    setAnnotatedImage(null);
+    setServerReady(false);
+    setPhase('return-wrong-tool');
+    setCameraRestartKey(k => k + 1);
+  }, []);
+
+  // ── At phase boundary: freeze snap1, check conformity, block if non-conformant ──
+  useEffect(() => {
+    if (timeRemaining === ACTION_AT && !snapshot1SavedRef.current) {
+      snapshot1SavedRef.current = true;
+      // Freeze best snapshot for Phase 2 comparison — informational only, no blocking.
+      // YOLO classification accuracy is too variable to hard-block on Phase 1 mismatches.
+      const best = bestSnapshot1Ref.current.length > 0 ? bestSnapshot1Ref.current : lastDetectionsRef.current;
+      if (drawerTools.length > 0 && best.length > 0) {
+        const snap1Names = toDisplayNames(best);
+        const p1 = phase1Conformity(snap1Names, drawerTools, toolName, action);
+        setPhase1Result(p1); // kept for display in ComparisonScreen, never blocks
+      }
+    }
+  }, [timeRemaining, drawerTools, toolName, action]);
+
   // ── Timer end: capture snap2 explicitly, then show comparison ───────────────
   const onTimerEnd = useCallback(() => {
     isRunningRef.current = false;
-    snapshot2Ref.current = [...lastDetectionsRef.current]; // freeze snap2 at t=0
+    // For return: use best Phase 2 snapshot (most tools = returned tool is present).
+    // For borrow: use last detection (fewer tools = borrowed tool is gone).
+    // lastDetectionsRef is updated directly in the loop (no React render delay).
+    if (actionRef.current === 'return' && bestSnapshot2Ref.current.length > 0) {
+      snapshot2Ref.current = [...bestSnapshot2Ref.current];
+    } else {
+      snapshot2Ref.current = [...lastDetectionsRef.current];
+    }
     stopCamera();
     if (!drawerId) { onDetectionSuccess(); return; }
     setPhase('comparing');
@@ -211,6 +260,9 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   useEffect(() => {
     const timer = setInterval(() => {
       setTimeRemaining(prev => {
+        if (timerPausedRef.current) return prev;
+        // Freeze Phase 1 countdown until YOLO gives its first response (model loaded)
+        if (!serverReadyRef.current && prev > ACTION_AT) return prev;
         if (prev <= 1) { clearInterval(timer); onTimerEnd(); return 0; }
         return prev - 1;
       });
@@ -220,6 +272,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   // ── Start camera (rear on mobile, any camera on desktop) ─────────────────
   useEffect(() => {
+    let cancelled = false;
     const start = async () => {
       let stream: MediaStream | null = null;
       try {
@@ -230,16 +283,26 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         try {
           stream = await navigator.mediaDevices.getUserMedia({ video: true });
         } catch {
-          setError("Impossible d'accéder à la caméra. Vérifiez les permissions.");
-          isRunningRef.current = false;
+          if (!cancelled) {
+            setError("Impossible d'accéder à la caméra. Vérifiez les permissions.");
+            isRunningRef.current = false;
+          }
           return;
         }
       }
-      if (videoRef.current && stream) videoRef.current.srcObject = stream;
+      if (!cancelled && videoRef.current && stream) {
+        videoRef.current.srcObject = stream;
+      } else if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+      }
     };
     start();
-    return () => stopCamera();
-  }, [stopCamera]);
+    return () => {
+      cancelled = true;
+      stopCamera();
+      setCameraReady(false);
+    };
+  }, [stopCamera, cameraRestartKey]);
 
   // ── Continuous detection loop ──────────────────────────────────────────────
   useEffect(() => {
@@ -266,13 +329,42 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
             if (result.success) {
               if (result.annotated_image) setAnnotatedImage(result.annotated_image);
               if (result.detections) {
+                // Update ref directly (no React render delay) so onTimerEnd always gets latest
+                lastDetectionsRef.current = result.detections;
                 setDetections(result.detections);
-                // Continuously update snap1 during phase 1 (frozen when snapshot1SavedRef = true)
+                // Phase 1: keep best snapshot (most tools = drawer fully visible)
                 if (!snapshot1SavedRef.current && result.detections.length > 0) {
-                  setSnapshot1([...result.detections]);
+                  if (result.detections.length >= bestSnapshot1Ref.current.length) {
+                    bestSnapshot1Ref.current = [...result.detections];
+                    setSnapshot1([...result.detections]);
+                  }
+                }
+                // Phase 2 return: keep best snapshot (most tools = returned tool appeared)
+                if (snapshot1SavedRef.current && actionRef.current === 'return') {
+                  if (result.detections.length >= bestSnapshot2Ref.current.length) {
+                    bestSnapshot2Ref.current = [...result.detections];
+                  }
                 }
               }
               setServerReady(true);
+              // Auto-cancel: require 4 consecutive frames detecting the wrong tool back in drawer
+              // to avoid triggering on a hand passing in front of the camera
+              if (cancelPendingToolRef.current) {
+                const detected = toDisplayNames(result.detections ?? []);
+                const toolSeen = detected.some(d => normalize(d) === normalize(cancelPendingToolRef.current!));
+                if (toolSeen) {
+                  returnConfirmCountRef.current += 1;
+                  if (returnConfirmCountRef.current >= 4) {
+                    isRunningRef.current = false;
+                    active = false;
+                    stopCamera();
+                    onDetectionFailure('Emprunt annulé — l\'outil a été remis dans le tiroir.');
+                    return;
+                  }
+                } else {
+                  returnConfirmCountRef.current = 0; // reset on any frame that misses the tool
+                }
+              }
             } else if (result.error?.includes('démarrage')) {
               await sleep(1000);
             }
@@ -284,6 +376,148 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     loop();
     return () => { active = false; };
   }, [cameraReady]);
+
+  // ── Phase: PHASE 1 BLOCKED (non-conformant drawer) ────────────────────────
+  if (phase === 'phase1-blocked' && phase1Result) {
+    const p1 = phase1Result;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-red-50 flex items-center justify-center p-6">
+        <div className="max-w-xl w-full bg-white rounded-3xl shadow-2xl p-8 border-2 border-orange-400">
+          <div className="flex flex-col items-center gap-3 mb-6">
+            <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center">
+              <AlertTriangle className="w-9 h-9 text-orange-500" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 text-center">Tiroir non conforme</h2>
+            <p className="text-slate-500 text-sm text-center">
+              L'état du tiroir ne correspond pas à la base de données.<br />
+              Aucune action n'a été enregistrée.
+            </p>
+          </div>
+
+          {/* Phase 1 detail */}
+          <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-4 mb-5 space-y-2">
+            <p className="text-xs font-bold uppercase tracking-wide text-orange-600 mb-1">
+              Écart détecté — Phase 1
+            </p>
+            <p className="text-sm font-semibold text-orange-800">
+              {p1.expected.length - p1.missing.length}/{p1.expected.length} outil{p1.expected.length > 1 ? 's' : ''} détecté{p1.expected.length > 1 ? 's' : ''}
+            </p>
+            {p1.missing.length > 0 && (
+              <div>
+                <p className="text-xs text-orange-700 font-semibold mt-1">Manquants dans le tiroir :</p>
+                <ul className="mt-1 space-y-1">
+                  {p1.missing.map(name => (
+                    <li key={name} className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                      <X className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                      {name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {p1.unexpected.length > 0 && (
+              <div>
+                <p className="text-xs text-orange-700 font-semibold mt-1">Inattendus dans le tiroir :</p>
+                <ul className="mt-1 space-y-1">
+                  {p1.unexpected.map(name => (
+                    <li key={name} className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                      {name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          {/* Actions */}
+          <div className="space-y-3">
+            <button
+              onClick={onRetry}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 text-white font-bold text-base hover:from-blue-700 hover:to-blue-600 transition-all shadow-md flex items-center justify-center gap-2"
+            >
+              <RefreshCw className="w-5 h-5" />
+              Réessayer la détection
+            </button>
+            <button
+              onClick={() => onDetectionFailure('Tiroir non conforme — opération annulée.')}
+              className="w-full py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold text-base hover:bg-slate-200 transition-all"
+            >
+              Annuler l'opération
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase: RETURN WRONG TOOL (awaiting camera confirmation before cancel) ────
+  if (phase === 'return-wrong-tool' && cancelPendingTool) {
+    const toolBack = detections.some(
+      d => normalize(getDisplayName(d.class)) === normalize(cancelPendingTool)
+    );
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-white to-orange-50 flex items-center justify-center p-6">
+        <div className="max-w-2xl w-full bg-white rounded-3xl shadow-2xl p-8 border-2 border-amber-400">
+          <div className="flex flex-col items-center gap-3 mb-6">
+            <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center">
+              <RefreshCw className="w-9 h-9 text-amber-500" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 text-center">Remettez l'outil dans le tiroir</h2>
+            <p className="text-slate-500 text-sm text-center">
+              Replacez <span className="font-semibold text-amber-700">&ldquo;{cancelPendingTool}&rdquo;</span> dans le tiroir.<br />
+              L'annulation sera confirmée automatiquement dès la détection.
+            </p>
+          </div>
+          <div className="relative bg-black rounded-2xl overflow-hidden border-4 border-amber-200 shadow-lg mb-4" style={{ aspectRatio: '16/9' }}>
+            <video ref={videoRef} autoPlay playsInline muted
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ opacity: cameraReady && !annotatedImage ? 1 : 0 }}
+              onCanPlay={() => setCameraReady(true)}
+            />
+            <canvas ref={captureRef} className="hidden" width={CAPTURE_W} height={CAPTURE_H} />
+            {annotatedImage && (
+              <img src={`data:image/jpeg;base64,${annotatedImage}`} alt="YOLO"
+                className="absolute inset-0 w-full h-full object-cover" />
+            )}
+            {!cameraReady && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-10">
+                <Camera className="w-10 h-10 text-slate-500 mb-3" />
+                <p className="text-slate-400 text-sm">Initialisation de la caméra...</p>
+              </div>
+            )}
+            {loading && serverReady && (
+              <div className="absolute top-4 left-4 bg-blue-600/85 px-3 py-1.5 rounded-lg flex items-center gap-2 z-20">
+                <Loader className="w-3 h-3 text-white animate-spin" />
+                <span className="text-white text-xs font-medium">YOLO...</span>
+              </div>
+            )}
+          </div>
+          {toolBack ? (
+            <div className="rounded-xl p-4 border-2 border-green-400 bg-green-50 flex items-center gap-3">
+              <CheckCircle className="w-6 h-6 text-green-600 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-green-600 mb-0.5">Outil détecté</p>
+                <p className="text-sm font-semibold text-green-800">
+                  <span className="font-bold">{cancelPendingTool}</span> est de retour dans le tiroir — annulation en cours...
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl p-4 border-2 border-amber-400 bg-amber-50 flex items-center gap-3">
+              <AlertTriangle className="w-6 h-6 text-amber-500 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-600 mb-0.5">En attente</p>
+                <p className="text-sm font-semibold text-amber-800">
+                  Placez <span className="font-bold">{cancelPendingTool}</span> dans le tiroir devant la caméra
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // ── Phase: COMPARISON ─────────────────────────────────────────────────────
   if (phase === 'comparing') {
@@ -301,6 +535,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         onCancel={() => onDetectionFailure("Validation annulée par l'utilisateur.")}
         onRetry={onRetry}
         onBorrowAlternative={onBorrowAlternative}
+        onReturnAndCancel={handleReturnAndCancel}
       />
     );
   }
@@ -594,6 +829,7 @@ interface ComparisonProps {
   onCancel: () => void;
   onRetry: () => void;
   onBorrowAlternative?: (wrongToolName: string) => void;
+  onReturnAndCancel?: (wrongToolName: string) => void;
 }
 
 const statusConfig: Record<string, { bg: string; border: string; icon: React.ReactNode; label: string }> = {
@@ -609,7 +845,7 @@ const statusConfig: Record<string, { bg: string; border: string; icon: React.Rea
 const ComparisonScreen: React.FC<ComparisonProps> = ({
   drawerId, toolName, action, drawerTools, loadingDrawer,
   snapshot1, snapshot2, annotatedImage,
-  onConfirm, onCancel, onRetry, onBorrowAlternative,
+  onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel,
 }) => {
   const snap1Names = toDisplayNames(snapshot1);
   const snap2Names = toDisplayNames(snapshot2);
@@ -811,10 +1047,10 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
                     </button>
                   )}
 
-                  {/* Annuler */}
-                  <button onClick={onCancel}
+                  {/* Annuler — camera verifies tool is returned before canceling */}
+                  <button onClick={() => onReturnAndCancel?.(p2.wrongToolName)}
                     className="w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition-colors flex items-center justify-center gap-2">
-                    <X className="w-4 h-4" /> Annuler l'emprunt
+                    <X className="w-4 h-4" /> Annuler l'emprunt (remettre l'outil)
                   </button>
                 </div>
               ) : (

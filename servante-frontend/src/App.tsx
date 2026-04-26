@@ -1162,6 +1162,7 @@ export default function App() {
   // ✅ États pour la validation produit IA
   const [activeBorrowId, setActiveBorrowId] = useState<string | null>(null);
   const [validationRequired, setValidationRequired] = useState(false);
+  const [detectionRetryKey, setDetectionRetryKey] = useState(0);
 
   // États pour le scan YOLO du tiroir
   const [drawerScanResult, setDrawerScanResult] = useState<DrawerScanResult | null>(null);
@@ -4505,10 +4506,12 @@ export default function App() {
 
     return (
       <ProductValidation
+        key={detectionRetryKey}
         toolName={selectedTool.name}
         borrowId={activeBorrowId || ''}
         drawerId={selectedTool.drawer || undefined}
         action={isReturnMode ? 'return' : 'borrow'}
+        isRetry={detectionRetryKey > 0}
         onValidationSuccess={async () => {
           if (isReturnMode && activeBorrowId) {
             // Retour : enregistrer en DB maintenant que la validation est confirmée
@@ -4539,9 +4542,7 @@ export default function App() {
           await loadToolsFromBackend();
         }}
         onRetry={() => {
-          // Relancer la détection YOLO sans fermer le tiroir
-          // (l'utilisateur doit remettre l'outil incorrect et réessayer)
-          setCurrentScreen('product-validation');
+          setDetectionRetryKey(k => k + 1);
         }}
         onBorrowAlternative={async (wrongToolName: string) => {
           // L'utilisateur a pris un autre outil et veut l'emprunter à la place
