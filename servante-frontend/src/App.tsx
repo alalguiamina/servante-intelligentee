@@ -84,6 +84,7 @@ import AdminSettings from './components/AdminSettings';
 import BadgeScanner from './components/BadgeScanner';
 import ReturnTool from './components/ReturnTool';
 import ProductValidation from './components/ProductValidation';
+import DrawerClosingGuard from './components/DrawerClosingGuard';
 
 // ============================================
 // IMPORTS - API Backend
@@ -1163,6 +1164,7 @@ export default function App() {
   const [activeBorrowId, setActiveBorrowId] = useState<string | null>(null);
   const [validationRequired, setValidationRequired] = useState(false);
   const [detectionRetryKey, setDetectionRetryKey] = useState(0);
+  const [guardDrawerId, setGuardDrawerId] = useState<'1'|'2'|'3'|'4' | null>(null);
 
   // États pour le scan YOLO du tiroir
   const [drawerScanResult, setDrawerScanResult] = useState<DrawerScanResult | null>(null);
@@ -4514,11 +4516,9 @@ export default function App() {
         isRetry={detectionRetryKey > 0}
         onValidationSuccess={async () => {
           if (isReturnMode && activeBorrowId) {
-            // Retour : enregistrer en DB maintenant que la validation est confirmée
             await borrowsAPI.markAsReturned(activeBorrowId);
             showToast('✅ Retour validé !', 'success', 3000);
           } else {
-            // Emprunt : créer l'enregistrement DB maintenant que l'outil est confirmé
             const result = await borrowsAPI.borrow(currentUser!.id, selectedTool.id, 1);
             if (result.success) {
               showToast('✅ Emprunt confirmé !', 'success', 3000);
@@ -4526,9 +4526,16 @@ export default function App() {
               showToast(`❌ ${t('borrowError')}`, 'error', 3000);
             }
           }
-          closeDrawer();
+          // Save drawer ID before resetting, then go to closing guard
+          // (guard handles closeDrawer itself + monitors for theft during closing)
+          const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           resetValidation();
-          setCurrentScreen('tool-selection');
+          if (dId && ['1','2','3','4'].includes(dId)) {
+            setGuardDrawerId(dId);
+            setCurrentScreen('drawer-closing-guard');
+          } else {
+            setCurrentScreen('tool-selection');
+          }
           await loadBorrowsFromBackend();
           await loadToolsFromBackend();
         }}
@@ -4568,6 +4575,21 @@ export default function App() {
         onSkip={() => {
           closeDrawer();
           resetValidation();
+          setCurrentScreen('tool-selection');
+        }}
+      />
+    );
+  }
+
+  // ============================================
+  // ÉCRAN - SURVEILLANCE FERMETURE TIROIR
+  // ============================================
+  if (currentScreen === 'drawer-closing-guard' && guardDrawerId) {
+    return (
+      <DrawerClosingGuard
+        drawerId={guardDrawerId}
+        onComplete={async () => {
+          setGuardDrawerId(null);
           setCurrentScreen('tool-selection');
         }}
       />
