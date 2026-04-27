@@ -29,6 +29,7 @@ const GUARD_SECONDS = 15;
 const CLOSE_RESUME_SECONDS = 15; // temps accordé après reprise moteur
 const DRAWER_CLOSE_MS = 13000;   // durée estimée de fermeture complète du tiroir
 const STABILIZE_FRAMES = 3;      // frames to collect before comparison (allow tool visibility before grab)
+const TOOL_CONFIRM_FRAMES = 3;   // frames a tool must appear in during monitoring to be considered real
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -77,6 +78,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const motorWasRunningAtHandRef = useRef(false); // was motor moving when hand was first confirmed?
   const closeTimerRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stabilizingFramesRef     = useRef(0);    // frames after motor stop before comparing
+  const preHandToolCountRef      = useRef<Record<string, number>>({});  // per-tool frame count during monitoring
 
   const [phase,                setPhase]                = useState<GuardPhase>('monitoring');
   const [cameraReady,          setCameraReady]          = useState(false);
@@ -145,6 +147,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                 startCloseTimer();
                 setTimeLeft(CLOSE_RESUME_SECONDS);
               }
+              preHandToolCountRef.current = {};
               phaseRef.current = 'monitoring';
               setPhase('monitoring');
             })();
@@ -263,8 +266,11 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                 missingCountRef.current = {};
                 motorWasRunningAtHandRef.current = motorRunningRef.current;
                 setDrawerWasMoving(motorRunningRef.current);
-                // ← FREEZE the last frame RIGHT NOW before hand detection (most accurate comparison)
-                lastFrameBeforeHandRef.current = [...toolClasses];
+                // Use tools confirmed over multiple frames; fall back to current frame when motor was running
+                const confirmedTools = Object.keys(preHandToolCountRef.current)
+                  .filter(cls => preHandToolCountRef.current[cls] >= TOOL_CONFIRM_FRAMES);
+                lastFrameBeforeHandRef.current = confirmedTools.length > 0 ? confirmedTools : [...toolClasses];
+                preHandToolCountRef.current = {};
                 if (motorRunningRef.current) {
                   hardwareAPI.stopMotors().catch(() => {});
                   motorStoppedByUsRef.current = true;
@@ -280,9 +286,14 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
               }
             } else {
               handCountRef.current = 0;
-              // Only update the reference when the drawer is stationary.
-              if (!motorRunningRef.current && toolClasses.length >= bestPreHandSnapRef.current.length) {
-                bestPreHandSnapRef.current = [...toolClasses];
+              if (!motorRunningRef.current) {
+                // Count how many frames each tool has been consistently seen (filters false positives)
+                toolClasses.forEach(cls => {
+                  preHandToolCountRef.current[cls] = (preHandToolCountRef.current[cls] ?? 0) + 1;
+                });
+                if (toolClasses.length >= bestPreHandSnapRef.current.length) {
+                  bestPreHandSnapRef.current = [...toolClasses];
+                }
               }
             }
           }
@@ -326,6 +337,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                     startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
                     setTimeLeft(CLOSE_RESUME_SECONDS);
                   }
+                  preHandToolCountRef.current = {};
                   phaseRef.current = 'monitoring';
                   setPhase('monitoring');
                 }
@@ -355,6 +367,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                   startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
                   setTimeLeft(CLOSE_RESUME_SECONDS);
                 }
+                preHandToolCountRef.current = {};
                 phaseRef.current = 'monitoring';
                 setPhase('monitoring');
               }
@@ -396,6 +409,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
       startCloseTimer();
       setTimeLeft(CLOSE_RESUME_SECONDS);
     }
+    preHandToolCountRef.current = {};
     phaseRef.current = 'monitoring';
     setPhase('monitoring');
   };
