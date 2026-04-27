@@ -4678,6 +4678,9 @@ export default function App() {
         drawerId={guardDrawerId}
         onComplete={async () => {
           setGuardDrawerId(null);
+          // Reload data after closing guard completes (for both borrow and return flows)
+          await loadBorrowsFromBackend();
+          await loadToolsFromBackend();
           setCurrentScreen('tool-selection');
         }}
         onBorrowStolenTools={async (toolClassNames) => {
@@ -4707,6 +4710,11 @@ export default function App() {
           await loadBorrowsFromBackend();
           await loadToolsFromBackend();
           setCurrentScreen('tool-selection');
+        }}
+        onReturnSuccess={(drawerId) => {
+          // ✅ NEW: After return validation succeeds, trigger DrawerClosingGuard for hand detection monitoring
+          setGuardDrawerId(drawerId as '1'|'2'|'3'|'4');
+          setCurrentScreen('drawer-closing-guard');
         }}
       />
     );

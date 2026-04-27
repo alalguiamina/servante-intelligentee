@@ -194,8 +194,14 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const handCountRef         = useRef(0);
   const clearCountRef        = useRef(0);
   const bestPreHandSnapRef   = useRef<string[]>([]);
+  const lastFrameBeforeHandRef = useRef<string[]>([]); // ← FREEZE frame before hand detected (for return action)
   const missingCountRef      = useRef<Record<string, number>>({});
   const stolenRef            = useRef<string[]>([]);
+  // ── Drawer state tracking for return action (matches DrawerClosingGuard pattern) ──
+  const drawerStoppedByUsRef = useRef(false); // true if WE issued stop on drawer
+  const drawerOpenCommandSentRef = useRef(false); // true if we already sent the open command during this cycle (NEVER send twice)
+  const drawerOpenTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const returnTimeLeftRef    = useRef(totalDuration);
 
   const [phase,             setPhase]             = useState<Phase>(initialPhase);
   const [timeRemaining,     setTimeRemaining]     = useState(totalDuration);
@@ -279,6 +285,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
       if (phase === 'hand-detection') {
         setPhase('detecting');
       }
+      // UNLOCK the drawer open command for the next cycle
+      drawerOpenCommandSentRef.current = false;
       // Freeze best snapshot for Phase 2 comparison
       snapshot1SavedRef.current = true;
       const best = bestSnapshot1Ref.current.length > 0 ? bestSnapshot1Ref.current : lastDetectionsRef.current;
@@ -292,7 +300,6 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   // ── Timer end: capture snap2 explicitly, then show comparison ───────────────
   const onTimerEnd = useCallback(() => {
-    isRunningRef.current = false;
     // For return: use best Phase 2 snapshot (most tools = returned tool is present).
     // For borrow: use last detection (fewer tools = borrowed tool is gone).
     // lastDetectionsRef is updated directly in the loop (no React render delay).
@@ -301,10 +308,10 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     } else {
       snapshot2Ref.current = [...lastDetectionsRef.current];
     }
-    stopCamera();
     if (!drawerId) { onDetectionSuccess(); return; }
+    // Keep detection running (isRunningRef.current stays true) so camera continues detecting during comparison
     setPhase('comparing');
-  }, [drawerId, stopCamera, onDetectionSuccess]);
+  }, [drawerId, onDetectionSuccess]);
 
   // ── Countdown ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -319,6 +326,15 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, [onTimerEnd, actionStartAt]);
+
+  // ── Cleanup drawer timer on unmount (for return action) ────────────────────
+  useEffect(() => {
+    // Reset drawer open command lock on fresh mount or action change
+    drawerOpenCommandSentRef.current = false;
+    return () => {
+      if (drawerOpenTimerRef.current) clearTimeout(drawerOpenTimerRef.current);
+    };
+  }, [action]);
 
   // ── Start camera (rear on mobile, any camera on desktop) ─────────────────
   useEffect(() => {
@@ -394,6 +410,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                     if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
                       handCountRef.current = 0;
                       missingCountRef.current = {};
+                      // ← FREEZE the last frame RIGHT NOW before hand confirmed (for accurate return detection)
+                      lastFrameBeforeHandRef.current = [...toolNames];
                       setPhase('hand-detected');
                     }
                   } else {
@@ -405,7 +423,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                 } else if (currentPhase === 'hand-detected') {
                   if (!hasHand) {
                     clearCountRef.current += 1;
-                    bestPreHandSnapRef.current.forEach(name => {
+                    // Compare against LAST FRAME RIGHT BEFORE hand was detected (for return: most accurate)
+                    lastFrameBeforeHandRef.current.forEach(name => {
                       const present = toolNames.some(current => normalize(current) === normalize(name));
                       if (!present) {
                         missingCountRef.current[name] = (missingCountRef.current[name] ?? 0) + 1;
@@ -414,7 +433,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                     if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
                       clearCountRef.current = 0;
                       const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2);
-                      const stolen = bestPreHandSnapRef.current.filter(
+                      const stolen = lastFrameBeforeHandRef.current.filter(
                         name => (missingCountRef.current[name] ?? 0) >= threshold
                       );
                       missingCountRef.current = {};
@@ -423,7 +442,11 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                         setStolenTools(stolen);
                         setPhase('alert');
                       } else {
-                        hardwareAPI.openDrawer(drawerId as '1' | '2' | '3' | '4').catch(() => {});
+                        // For return action: DO NOT reopen drawer during hand-detection cycles
+                        // Drawer should stay open throughout the entire return sequence
+                        // Only the parent component (ReturnTool) should close it after detection succeeds
+                        handCountRef.current = 0; // ← Reset hand detection counter for next cycle
+                        clearCountRef.current = 0; // ← Reset clear counter
                         setPhase('hand-detection');
                       }
                     }
@@ -441,8 +464,12 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                       stolenRef.current = [];
                       setStolenTools([]);
                       bestPreHandSnapRef.current = [...toolNames];
+                      lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
                       missingCountRef.current = {};
-                      hardwareAPI.openDrawer(drawerId as '1' | '2' | '3' | '4').catch(() => {});
+                      // For return action: DO NOT reopen drawer during alert recovery
+                      // Drawer should stay open throughout the entire return sequence
+                      handCountRef.current = 0; // ← Reset hand detection counter for next cycle
+                      clearCountRef.current = 0; // ← Reset clear counter
                       setPhase('hand-detection');
                     }
                   } else {
@@ -649,8 +676,12 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         snapshot1={snapshot1}
         snapshot2={snapshot2Ref.current}
         annotatedImage={annotatedImage}
-        onConfirm={() => { setPhase('confirming'); onDetectionSuccess(); }}
-        onCancel={() => onDetectionFailure("Validation annulée par l'utilisateur.")}
+        videoRef={videoRef}
+        captureRef={captureRef}
+        cameraReady={cameraReady}
+        detections={detections}
+        onConfirm={() => { isRunningRef.current = false; stopCamera(); setPhase('confirming'); onDetectionSuccess(); }}
+        onCancel={() => { isRunningRef.current = false; stopCamera(); onDetectionFailure("Validation annulée par l'utilisateur."); }}
         onRetry={onRetry}
         onBorrowAlternative={onBorrowAlternative}
         onReturnAndCancel={handleReturnAndCancel}
@@ -998,6 +1029,10 @@ interface ComparisonProps {
   snapshot1: Detection[];
   snapshot2: Detection[];
   annotatedImage: string | null;
+  videoRef: React.RefObject<HTMLVideoElement>;
+  captureRef: React.RefObject<HTMLCanvasElement>;
+  cameraReady: boolean;
+  detections: Detection[];
   onConfirm: () => void;
   onCancel: () => void;
   onRetry: () => void;
@@ -1018,7 +1053,7 @@ const statusConfig: Record<string, { bg: string; border: string; icon: React.Rea
 
 const ComparisonScreen: React.FC<ComparisonProps> = ({
   drawerId, toolName, action, drawerTools, loadingDrawer,
-  snapshot1, snapshot2, annotatedImage,
+  snapshot1, snapshot2, annotatedImage, videoRef, captureRef, cameraReady, detections,
   onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel, onExtraToolsDetected,
 }) => {
   const snap1Names = toDisplayNames(snapshot1);
@@ -1057,6 +1092,28 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
             Opération : <span className="font-semibold text-blue-700">{action === 'borrow' ? 'Emprunt' : 'Retour'}</span>
             {' '}— Outil : <span className="font-semibold text-blue-700">{toolName}</span>
           </p>
+
+          {/* Live camera feed */}
+          <div className="relative bg-black rounded-2xl overflow-hidden border-4 border-blue-200 shadow-lg mb-4" style={{ aspectRatio: '16/9' }}>
+            <video ref={videoRef} autoPlay playsInline muted
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ opacity: cameraReady ? 1 : 0 }}
+            />
+            <canvas ref={captureRef} className="hidden" width={CAPTURE_W} height={CAPTURE_H} />
+            {!cameraReady && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-10">
+                <Camera className="w-10 h-10 text-slate-500 mb-3" />
+                <p className="text-slate-400 text-sm">Caméra...</p>
+              </div>
+            )}
+            {detections.length > 0 && (
+              <div className="absolute bottom-4 right-4 bg-green-600/90 px-3 py-1.5 rounded-lg z-20">
+                <span className="text-white text-xs font-semibold">
+                  {detections.length} objet{detections.length > 1 ? 's' : ''} détecté{detections.length > 1 ? 's' : ''}
+                </span>
+              </div>
+            )}
+          </div>
 
           {loadingDrawer ? (
             <div className="flex justify-center py-10"><Loader className="w-8 h-8 animate-spin text-blue-500" /></div>

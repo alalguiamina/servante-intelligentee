@@ -28,9 +28,10 @@ interface Borrow {
 interface ReturnToolProps {
   onBack: () => void;
   currentUser: any;
+  onReturnSuccess?: (drawerId: string) => void; // Callback to trigger DrawerClosingGuard in parent
 }
 
-const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
+const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser, onReturnSuccess }) => {
   const { t } = useTranslation();
   const [activeBorrows, setActiveBorrows] = useState<Borrow[]>([]);
   const [selectedBorrow, setSelectedBorrow] = useState<Borrow | null>(null);
@@ -170,29 +171,35 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser }) => {
     try {
       setStatus('closing');
 
-      // Fermer le tiroir
-      if (selectedBorrow.tool.drawer) {
-        try {
-          await fetch(`${import.meta.env.VITE_API_URL}/hardware/drawer/close`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ drawerNumber: selectedBorrow.tool.drawer.toString() }),
-          });
-        } catch (error) {
-          console.error('Error closing drawer:', error);
-        }
-      }
-
-      // Confirmer le retour en base
+      // Confirm return in database FIRST
       const result = await borrowsAPI.return(selectedBorrow.id);
       if (result.success) {
-        setStatus('success');
         setActiveBorrows(prev => prev.filter(b => b.id !== selectedBorrow.id));
-        setTimeout(() => {
+
+        // ✅ NEW: Trigger DrawerClosingGuard in parent for hand detection monitoring during closing
+        if (selectedBorrow.tool.drawer && onReturnSuccess) {
+          onReturnSuccess(selectedBorrow.tool.drawer);
+          // Parent will show DrawerClosingGuard which will handle closing + monitoring
           setSelectedBorrow(null);
           setStatus('list');
-          onBack();
-        }, 2000);
+        } else {
+          // Fallback: close drawer manually if no parent callback
+          try {
+            await fetch(`${import.meta.env.VITE_API_URL}/hardware/drawer/close`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ drawerNumber: selectedBorrow.tool.drawer?.toString() }),
+            });
+          } catch (error) {
+            console.error('Error closing drawer:', error);
+          }
+          setStatus('success');
+          setTimeout(() => {
+            setSelectedBorrow(null);
+            setStatus('list');
+            onBack();
+          }, 2000);
+        }
       } else {
         setStatus('error');
         setErrorMessage(result.message || 'Error returning tool');

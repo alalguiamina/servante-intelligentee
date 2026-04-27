@@ -64,6 +64,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const handCountRef        = useRef(0);
   const clearCountRef       = useRef(0);
   const bestPreHandSnapRef  = useRef<string[]>([]);
+  const lastFrameBeforeHandRef = useRef<string[]>([]); // ← FREEZE last frame right before hand detected
   const missingCountRef     = useRef<Record<string, number>>({});
   const stolenRef           = useRef<string[]>([]);
   const timerPausedRef      = useRef(false);
@@ -102,6 +103,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const startCloseTimer = useCallback(() => {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     motorRunningRef.current = true;
+    motorStoppedByUsRef.current = false; // reset since we're restarting the motor
     closeTimerRef.current = setTimeout(() => {
       motorRunningRef.current = false; // drawer reached end-stop, motor stopped naturally
     }, DRAWER_CLOSE_MS);
@@ -206,6 +208,8 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                 missingCountRef.current = {};
                 motorWasRunningAtHandRef.current = motorRunningRef.current;
                 setDrawerWasMoving(motorRunningRef.current);
+                // ← FREEZE the last frame RIGHT NOW before hand detection (most accurate comparison)
+                lastFrameBeforeHandRef.current = [...toolClasses];
                 if (motorRunningRef.current) {
                   hardwareAPI.stopMotors().catch(() => {});
                   motorStoppedByUsRef.current = true;
@@ -230,20 +234,16 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
 
           // ── hand-detected: wait for hand to leave ───────────────────────
           else if (cur === 'hand-detected') {
-            // During stabilization: collect fresh reference frames before user can grab tools.
-            // The motor is stopped (drawer stationary), and the user just put their hand in.
-            // Their hand is already visible in these frames but they haven't grabbed anything yet.
-            // YOLO filters 'main', so we see the real tool visibility.
+            // During stabilization: just skip frames until hand position stabilizes
+            // Don't update reference — we use lastFrameBeforeHandRef (frozen when hand was first detected)
             if (stabilizingFramesRef.current > 0) {
-              if (toolClasses.length >= bestPreHandSnapRef.current.length) {
-                bestPreHandSnapRef.current = [...toolClasses];
-              }
               stabilizingFramesRef.current--;
             }
-            // After stabilization: normal hand-leaving detection
+            // After stabilization: compare frozen "before hand" frame with current detections
             else if (!hasHand) {
               clearCountRef.current += 1;
-              bestPreHandSnapRef.current.forEach(cls => {
+              // Compare against the LAST FRAME RIGHT BEFORE hand was detected (most accurate)
+              lastFrameBeforeHandRef.current.forEach(cls => {
                 const present = toolClasses.some(c => c.toLowerCase() === cls.toLowerCase());
                 if (!present) {
                   missingCountRef.current[cls] = (missingCountRef.current[cls] ?? 0) + 1;
@@ -252,12 +252,14 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
               if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
                 clearCountRef.current = 0;
                 const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2);
-                const stolen = bestPreHandSnapRef.current.filter(
+                const stolen = lastFrameBeforeHandRef.current.filter(
                   cls => (missingCountRef.current[cls] ?? 0) >= threshold
                 );
                 missingCountRef.current = {};
                 motorWasRunningAtHandRef.current = false;
                 setDrawerWasMoving(false);
+                lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
+                handCountRef.current = 0; // ← Reset hand detection counter
                 if (stolen.length > 0) {
                   stolenRef.current = stolen;
                   setStolenTools(stolen);
@@ -266,8 +268,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                 } else {
                   if (motorStoppedByUsRef.current) {
                     hardwareAPI.closeDrawer(drawerId).catch(() => {});
-                    motorStoppedByUsRef.current = false;
-                    startCloseTimer();
+                    startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
                     setTimeLeft(CLOSE_RESUME_SECONDS);
                   }
                   phaseRef.current = 'monitoring';
@@ -291,11 +292,12 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
                 stolenRef.current = [];
                 setStolenTools([]);
                 bestPreHandSnapRef.current = [...toolClasses];
+                lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
                 missingCountRef.current = {};
+                handCountRef.current = 0; // ← Reset hand detection counter
                 if (motorStoppedByUsRef.current) {
                   hardwareAPI.closeDrawer(drawerId).catch(() => {});
-                  motorStoppedByUsRef.current = false;
-                  startCloseTimer();
+                  startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
                   setTimeLeft(CLOSE_RESUME_SECONDS);
                 }
                 phaseRef.current = 'monitoring';
@@ -324,10 +326,13 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     }
     stolenRef.current = [];
     setStolenTools([]);
+    lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
+    missingCountRef.current = {}; // ← Reset missing count
+    handCountRef.current = 0; // ← Reset hand detection counter
+    clearCountRef.current = 0; // ← Reset clear counter
     if (motorStoppedByUsRef.current) {
       hardwareAPI.closeDrawer(drawerId).catch(() => {});
-      motorStoppedByUsRef.current = false;
-      startCloseTimer();
+      startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
       setTimeLeft(CLOSE_RESUME_SECONDS);
     }
     phaseRef.current = 'monitoring';
