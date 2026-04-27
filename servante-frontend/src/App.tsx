@@ -2388,15 +2388,15 @@ export default function App() {
             }
           }
         } else {
-          // ✅ MODE EMPRUNT — ouvrir le tiroir puis lancer la détection YOLO unifiée pendant la course moteur.
-          // L'emprunt est enregistré en DB SEULEMENT après validation YOLO réussie
+          // ✅ MODE EMPRUNT — ouvrir le tiroir, passer par la garde d'ouverture (25s), puis action (10s)
           if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
               console.warn('⚠️ Tiroir non disponible');
             });
             setGuardDrawerId(selectedTool.drawer as '1' | '2' | '3' | '4');
+            setGuardSnapshot([]);
             setDetectionRetryKey(0);
-            setCurrentScreen('product-validation');
+            setCurrentScreen('drawer-opening-guard');
           } else {
             setDetectionRetryKey(0);
             setCurrentScreen('product-validation');
@@ -4679,6 +4679,20 @@ export default function App() {
         onComplete={async () => {
           setGuardDrawerId(null);
           setCurrentScreen('tool-selection');
+        }}
+        onBorrowStolenTools={async (toolClassNames) => {
+          if (!currentUser) return;
+          const normalize = (s: string) => s.toLowerCase().trim()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/-/g, ' ');
+          for (const cls of toolClassNames) {
+            const tool = tools.find(t => normalize(t.name) === normalize(cls));
+            if (tool && tool.availableQuantity > 0) {
+              await borrowsAPI.borrow(currentUser.id, tool.id, 1);
+            }
+          }
+          await loadBorrowsFromBackend();
+          await loadToolsFromBackend();
+          showToast(`✅ Emprunt${toolClassNames.length > 1 ? 's' : ''} enregistré${toolClassNames.length > 1 ? 's' : ''}`, 'success', 3000);
         }}
       />
     );

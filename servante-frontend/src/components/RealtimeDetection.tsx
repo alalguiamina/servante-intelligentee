@@ -394,7 +394,6 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                     if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
                       handCountRef.current = 0;
                       missingCountRef.current = {};
-                      hardwareAPI.stopMotors().catch(() => {});
                       setPhase('hand-detected');
                     }
                   } else {

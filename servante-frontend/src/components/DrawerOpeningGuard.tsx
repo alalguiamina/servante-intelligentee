@@ -103,16 +103,6 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
     return () => { cancelled = true; stopCamera(); setCameraReady(false); };
   }, [stopCamera]);
 
-  // Stop motor after 7s (drawer reaches physical end, but monitoring continues 25s)
-  useEffect(() => {
-    const motorStopTimer = setTimeout(() => {
-      if (isRunningRef.current) {
-        hardwareAPI.stopMotors().catch(() => {});
-      }
-    }, 7000);
-    return () => clearTimeout(motorStopTimer);
-  }, []);
-
   // Countdown — paused during alert
   useEffect(() => {
     const t = setInterval(() => {
@@ -183,7 +173,6 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
               if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
                 handCountRef.current = 0;
                 missingCountRef.current = {};
-                hardwareAPI.stopMotors().catch(() => {});
                 phaseRef.current = 'hand-detected';
                 setPhase('hand-detected');
               }
@@ -290,7 +279,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
           <h2 className="text-2xl font-bold text-slate-900">
             {phase === 'safe'           ? 'Tiroir vérifié'
             : phase === 'alert'         ? 'Outil retiré sans autorisation'
-            : phase === 'hand-detected' ? 'Main détectée — moteur arrêté'
+            : phase === 'hand-detected' ? 'Main détectée — analyse en cours'
             : 'Vérification à l\'ouverture'}
           </h2>
           <p className="text-sm text-slate-500 text-center">
@@ -299,7 +288,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
               : phase === 'alert'
               ? 'Un outil a été retiré du tiroir avant l\'opération autorisée.'
               : phase === 'hand-detected'
-              ? 'Retirez votre main du tiroir pour continuer.'
+              ? 'Retirez votre main — le système vérifie si un outil a été pris.'
               : `Tiroir ${drawerId} — surveillance avant opération`}
           </p>
         </div>
@@ -329,7 +318,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
           <div className="mb-4 rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-3 flex items-center gap-3 animate-pulse">
             <AlertTriangle className="w-6 h-6 text-amber-500 shrink-0" />
             <p className="text-sm font-bold text-amber-800">
-              Main détectée — Retirez votre main pour que la vérification reprenne.
+              Main détectée — Retirez votre main pour analyser le contenu du tiroir.
             </p>
           </div>
         )}
