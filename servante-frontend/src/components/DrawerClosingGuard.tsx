@@ -67,8 +67,9 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const lastFrameBeforeHandRef = useRef<string[]>([]); // ← FREEZE last frame right before hand detected
   const missingCountRef     = useRef<Record<string, number>>({});
   const stolenRef           = useRef<string[]>([]);
-  const timerPausedRef      = useRef(false);
-  const borrowAutoTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerPausedRef             = useRef(false);
+  const borrowAutoTimerRef         = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onBorrowStolenToolsRef     = useRef(onBorrowStolenTools);
 
   // Motor state tracking — prevents sending commands to a motor already at end-stop
   const motorRunningRef          = useRef(true);  // true while we believe the motor is still moving
@@ -105,6 +106,9 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     }, DRAWER_CLOSE_MS);
   }, []);
 
+  // Keep ref in sync with latest prop without adding it to effect deps
+  useEffect(() => { onBorrowStolenToolsRef.current = onBorrowStolenTools; }, [onBorrowStolenTools]);
+
   // Pause timer during borrow-confirm and alert
   useEffect(() => {
     phaseRef.current = phase;
@@ -126,7 +130,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
             (async () => {
               setBorrowConfirmLoading(true);
               try {
-                await onBorrowStolenTools?.(stolenRef.current);
+                await onBorrowStolenToolsRef.current?.(stolenRef.current.map(displayName));
               } catch (error) {
                 console.error('Error borrowing tools:', error);
               } finally {
@@ -157,7 +161,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
       clearInterval(timer);
       borrowAutoTimerRef.current = null;
     };
-  }, [phase, onBorrowStolenTools, drawerId, startCloseTimer]);
+  }, [phase, drawerId, startCloseTimer]);
 
   // Command drawer to close on mount and start motor timer
   useEffect(() => {
@@ -377,7 +381,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
 
     setBorrowConfirmLoading(true);
     try {
-      await onBorrowStolenTools?.(stolenRef.current);
+      await onBorrowStolenToolsRef.current?.(stolenRef.current.map(displayName));
     } catch (error) {
       console.error('Error borrowing tools:', error);
     } finally {

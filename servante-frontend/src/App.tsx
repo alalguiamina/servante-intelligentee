@@ -4692,19 +4692,29 @@ export default function App() {
           await loadToolsFromBackend();
           setCurrentScreen('tool-selection');
         }}
-        onBorrowStolenTools={async (toolClassNames) => {
+        onBorrowStolenTools={async (toolDisplayNames) => {
           if (!currentUser) return;
           const normalize = (s: string) => s.toLowerCase().trim()
             .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/-/g, ' ');
-          for (const cls of toolClassNames) {
-            const tool = tools.find(t => normalize(t.name) === normalize(cls));
+          let registeredCount = 0;
+          for (const name of toolDisplayNames) {
+            const tool = tools.find(t => normalize(t.name) === normalize(name));
             if (tool && tool.availableQuantity > 0) {
-              await borrowsAPI.borrow(currentUser.id, tool.id, 1);
+              try {
+                await borrowsAPI.borrow(currentUser.id, tool.id, 1);
+                registeredCount++;
+              } catch {
+                console.error('Failed to register borrow for:', name);
+              }
             }
           }
-          await loadBorrowsFromBackend();
-          await loadToolsFromBackend();
-          showToast(`✅ Emprunt${toolClassNames.length > 1 ? 's' : ''} enregistré${toolClassNames.length > 1 ? 's' : ''}`, 'success', 3000);
+          loadBorrowsFromBackend().catch(() => {});
+          loadToolsFromBackend().catch(() => {});
+          if (registeredCount > 0) {
+            showToast(`✅ Emprunt${registeredCount > 1 ? 's' : ''} enregistré${registeredCount > 1 ? 's' : ''} (${registeredCount})`, 'success', 3000);
+          } else {
+            showToast('⚠️ Outil non trouvé dans la base de données', 'warning', 3000);
+          }
         }}
       />
     );
