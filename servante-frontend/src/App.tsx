@@ -883,7 +883,8 @@ const AdminBorrowsTable: React.FC<{
   onSendBulkEmail: (borrows: BorrowRecord[]) => void;
   getTranslatedToolName: (toolName: string) => string;
   onReturnAll?: () => void;
-}> = ({ borrows, onSendEmail, onSendBulkEmail, getTranslatedToolName, onReturnAll }) => {
+  onMarkAsReturned?: (borrow: BorrowRecord) => void;
+}> = ({ borrows, onSendEmail, onSendBulkEmail, getTranslatedToolName, onReturnAll, onMarkAsReturned }) => {
   const { t, i18n } = useTranslation();
 
   // Calculer les emprunts en retard
@@ -1032,17 +1033,29 @@ const AdminBorrowsTable: React.FC<{
                     )}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    {(isOverdue || isDueSoon) && borrow.status !== 'returned' && (
-                      <button
-                        onClick={() => onSendEmail(borrow)}
-                        className={`px-3 py-1.5 rounded-lg text-white font-semibold text-xs transition-all ${isOverdue
-                          ? 'bg-red-600 hover:bg-red-700'
-                          : 'bg-amber-600 hover:bg-amber-700'
-                          }`}
-                      >
-                        {t('send')}
-                      </button>
-                    )}
+                    <div className="flex items-center justify-center gap-2">
+                      {(isOverdue || isDueSoon) && borrow.status !== 'returned' && (
+                        <button
+                          onClick={() => onSendEmail(borrow)}
+                          className={`px-3 py-1.5 rounded-lg text-white font-semibold text-xs transition-all ${isOverdue
+                            ? 'bg-red-600 hover:bg-red-700'
+                            : 'bg-amber-600 hover:bg-amber-700'
+                            }`}
+                        >
+                          {t('send')}
+                        </button>
+                      )}
+                      {borrow.status !== 'returned' && onMarkAsReturned && (
+                        <button
+                          onClick={() => onMarkAsReturned(borrow)}
+                          className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white font-semibold text-xs transition-all flex items-center gap-1"
+                          title="Marquer comme retourné par l'admin"
+                        >
+                          <CheckCircle className="w-3 h-3" />
+                          Retourné
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -1247,6 +1260,9 @@ export default function App() {
   const [toolModalOpen, setToolModalOpen] = useState(false);
   const [toolModalMode, setToolModalMode] = useState<ModalMode>('create');
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
+
+  // État pour la modale "emprunts actifs" d'un outil (admin manage tools)
+  const [activeBorrowsModalTool, setActiveBorrowsModalTool] = useState<Tool | null>(null);
 
   // États pour la gestion des catégories
   const [categories, setCategories] = useState<any[]>([]);
@@ -4460,6 +4476,21 @@ export default function App() {
               onSendEmail={handleSendEmail}
               onSendBulkEmail={handleSendBulkEmail}
               getTranslatedToolName={getTranslatedToolName}
+              onMarkAsReturned={async (borrow) => {
+                if (!window.confirm(`Marquer l'emprunt de "${getTranslatedToolName(borrow.toolName)}" par ${borrow.userName} comme retourné ?`)) return;
+                try {
+                  const result = await borrowsAPI.markAsReturned(borrow.id);
+                  if (result.success) {
+                    showToast(`✅ Emprunt de "${getTranslatedToolName(borrow.toolName)}" marqué comme retourné`, 'success', 3000);
+                    await loadBorrowsFromBackend();
+                    await loadToolsFromBackend();
+                  } else {
+                    showToast(`❌ Impossible de marquer comme retourné`, 'error', 3000);
+                  }
+                } catch {
+                  showToast(`❌ Erreur lors du retour`, 'error', 3000);
+                }
+              }}
               onReturnAll={async () => {
                 const activeBorrowsCount = allBorrows.filter(
                   b => b.status === 'active' || b.status === 'overdue'
@@ -5380,7 +5411,17 @@ export default function App() {
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="flex items-center justify-center gap-2">
+                          <div className="flex items-center justify-center gap-2 flex-wrap">
+                            {(toolBorrowCounts.find(tc => tc.toolId === tool.id)?.borrowCount ?? 0) > 0 && (
+                              <button
+                                onClick={() => setActiveBorrowsModalTool(tool)}
+                                className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all text-sm font-semibold flex items-center gap-1"
+                                title="Voir les emprunts actifs et marquer comme retourné"
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                                Retours
+                              </button>
+                            )}
                             <button
                               onClick={() => {
                                 setSelectedToolForEdit(tool);
@@ -5810,6 +5851,109 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {/* Modale Emprunts Actifs — marquer comme retourné */}
+          {activeBorrowsModalTool && (() => {
+            const activeBorrows = allBorrows.filter(
+              b => b.toolId === activeBorrowsModalTool.id &&
+                (b.status === 'active' || b.status === 'overdue')
+            );
+            return (
+              <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+                <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-xl font-bold text-slate-900">
+                        Emprunts actifs — {getTranslatedToolName(activeBorrowsModalTool.name)}
+                      </h3>
+                      <p className="text-sm text-slate-500 mt-1">
+                        {activeBorrows.length} emprunt{activeBorrows.length > 1 ? 's' : ''} en cours
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setActiveBorrowsModalTool(null)}
+                      className="p-2 hover:bg-slate-100 rounded-lg transition-all"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {activeBorrows.length === 0 ? (
+                    <p className="text-center text-slate-500 py-6">Aucun emprunt actif.</p>
+                  ) : (
+                    <ul className="space-y-3 max-h-80 overflow-y-auto">
+                      {activeBorrows.map(borrow => {
+                        const lateStatus = calculateLateStatus(borrow);
+                        return (
+                          <li key={borrow.id}
+                            className={`flex items-center justify-between gap-3 p-3 rounded-xl border-2 ${
+                              lateStatus.status === 'overdue' ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0 ${
+                                lateStatus.status === 'overdue' ? 'bg-red-600' : 'bg-blue-700'
+                              }`}>
+                                {borrow.userName.charAt(0)}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-slate-900 truncate">{borrow.userName}</p>
+                                <p className="text-xs text-slate-500">
+                                  Depuis le {new Date(borrow.borrowDate).toLocaleDateString('fr-FR')}
+                                  {lateStatus.status === 'overdue' && (
+                                    <span className="ml-2 text-red-600 font-semibold">
+                                      · {lateStatus.daysLate}j de retard
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={async () => {
+                                if (!window.confirm(`Marquer l'emprunt de ${borrow.userName} comme retourné ?`)) return;
+                                try {
+                                  const result = await borrowsAPI.markAsReturned(borrow.id);
+                                  if (result.success) {
+                                    showToast(`✅ Emprunt de ${borrow.userName} marqué comme retourné`, 'success', 3000);
+                                    await loadBorrowsFromBackend();
+                                    await loadToolsFromBackend();
+                                    // Fermer la modale si plus d'emprunts actifs
+                                    const remaining = allBorrows.filter(
+                                      b => b.toolId === activeBorrowsModalTool.id &&
+                                        (b.status === 'active' || b.status === 'overdue') &&
+                                        b.id !== borrow.id
+                                    );
+                                    if (remaining.length === 0) setActiveBorrowsModalTool(null);
+                                  } else {
+                                    showToast('❌ Impossible de marquer comme retourné', 'error', 3000);
+                                  }
+                                } catch {
+                                  showToast('❌ Erreur lors du retour', 'error', 3000);
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shrink-0 transition-all"
+                            >
+                              <CheckCircle className="w-3 h-3" />
+                              Retourné
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      onClick={() => setActiveBorrowsModalTool(null)}
+                      className="px-4 py-2 bg-slate-200 hover:bg-slate-300 rounded-lg font-semibold text-sm transition-all"
+                    >
+                      Fermer
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     );

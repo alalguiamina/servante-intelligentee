@@ -103,6 +103,16 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
     return () => { cancelled = true; stopCamera(); setCameraReady(false); };
   }, [stopCamera]);
 
+  // Stop motor after 7s (drawer reaches physical end, but monitoring continues 25s)
+  useEffect(() => {
+    const motorStopTimer = setTimeout(() => {
+      if (isRunningRef.current) {
+        hardwareAPI.stopMotors().catch(() => {});
+      }
+    }, 7000);
+    return () => clearTimeout(motorStopTimer);
+  }, []);
+
   // Countdown — paused during alert
   useEffect(() => {
     const t = setInterval(() => {
@@ -209,8 +219,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
                   phaseRef.current = 'alert';
                   setPhase('alert');
                 } else {
-                  // Nothing taken — resume drawer opening
-                  hardwareAPI.openDrawer(drawerId).catch(() => {});
+                  // Nothing taken — continue monitoring (don't restart motor)
                   phaseRef.current = 'monitoring';
                   setPhase('monitoring');
                 }
@@ -233,8 +242,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
                 setStolenTools([]);
                 bestPreHandSnapRef.current = [...toolClasses];
                 missingCountRef.current = {};
-                // Tool returned — motor can now resume drawer opening
-                hardwareAPI.openDrawer(drawerId).catch(() => {});
+                // Tool returned — continue monitoring (opening already done)
                 phaseRef.current = 'monitoring';
                 setPhase('monitoring');
               }

@@ -109,6 +109,16 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     return () => { cancelled = true; stopCamera(); setCameraReady(false); };
   }, [stopCamera]);
 
+  // Stop motor after 8s (drawer reaches physical end, but monitoring continues)
+  useEffect(() => {
+    const motorStopTimer = setTimeout(() => {
+      if (isRunningRef.current) {
+        hardwareAPI.stopMotors().catch(() => {});
+      }
+    }, 8000);
+    return () => clearTimeout(motorStopTimer);
+  }, []);
+
   // Countdown — paused during alert
   useEffect(() => {
     const t = setInterval(() => {
