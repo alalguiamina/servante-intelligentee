@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import axios from 'axios';
 import { aiValidationService } from '../services/aiValidationService.js';
+import { emailService } from '../services/emailService.js';
 import * as fs from 'fs';
 
 const prisma = new PrismaClient();
@@ -36,6 +37,26 @@ const calculateLateStatus = (dueDate: Date, returnDate?: Date) => {
     : 0;
   
   return { isLate: isOverdue, daysLate, status: isOverdue ? 'OVERDUE' : 'ACTIVE' };
+};
+
+const BORROW_LIMIT = 4;
+const ACTIVE_BORROW_STATUSES = ['ACTIVE', 'OVERDUE', 'VALIDATED'] as const;
+
+const getAdminEmails = async (): Promise<string[]> => {
+  const envEmails = (process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
+    .split(',')
+    .map(email => email.trim())
+    .filter(Boolean);
+
+  const admins = await prisma.user.findMany({
+    where: { role: 'ADMIN' },
+    select: { email: true }
+  });
+
+  return Array.from(new Set([
+    ...envEmails,
+    ...admins.map(admin => admin.email),
+  ]));
 };
 
 // @desc    Créer un nouvel emprunt
@@ -85,6 +106,21 @@ export const createBorrow = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
+    const activeBorrowCount = await prisma.borrow.count({
+      where: {
+        userId,
+        status: { in: [...ACTIVE_BORROW_STATUSES] }
+      }
+    });
+
+    if (activeBorrowCount >= BORROW_LIMIT) {
+      res.status(400).json({
+        success: false,
+        message: `Limite atteinte: un utilisateur peut emprunter au maximum ${BORROW_LIMIT} outils en même temps`
+      });
+      return;
+    }
+
     const borrowDate = new Date();
     const dueDate = calculateDueDate(borrowDate, daysToReturn);
 
@@ -129,6 +165,8 @@ export const createBorrow = async (req: Request, res: Response): Promise<void> =
         // Ne pas échouer l'emprunt si le moteur échoue
       }
     }
+
+    void emailService.sendBorrowConfirmation(borrow.user, borrow.tool, borrow);
 
     res.status(201).json({
       success: true,
@@ -200,6 +238,8 @@ export const returnBorrow = async (req: Request, res: Response): Promise<void> =
         borrowedQuantity: { decrement: 1 }
       }
     });
+
+    void emailService.sendReturnConfirmation(updatedBorrow.user, updatedBorrow.tool, updatedBorrow);
 
     res.status(200).json({
       success: true,
@@ -520,6 +560,8 @@ export const markAsReturned = async (req: Request, res: Response): Promise<void>
       }
     });
 
+    void emailService.sendReturnConfirmation(updatedBorrow.user, updatedBorrow.tool, updatedBorrow);
+
     res.json({
       success: true,
       message: `${borrow.tool.name} marqué comme retourné`,
@@ -527,6 +569,64 @@ export const markAsReturned = async (req: Request, res: Response): Promise<void>
     });
   } catch (error) {
     console.error('❌ Erreur markAsReturned:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur'
+    });
+  }
+};
+
+// @desc    Envoyer un avertissement si l'utilisateur prend plus d'outils que prévu
+// @route   POST /api/borrows/warnings/extra-tools
+// @access  Public
+export const sendExtraToolsWarning = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userId, expectedToolName, extraToolNames = [], drawer } = req.body;
+
+    if (!userId || !expectedToolName) {
+      res.status(400).json({
+        success: false,
+        message: 'userId et expectedToolName requis'
+      });
+      return;
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { fullName: true, email: true }
+    });
+
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        message: 'Utilisateur non trouvé'
+      });
+      return;
+    }
+
+    const normalizedExtraTools = Array.isArray(extraToolNames)
+      ? extraToolNames.map((name: unknown) => String(name).trim()).filter(Boolean)
+      : [String(extraToolNames).trim()].filter(Boolean);
+
+    const adminEmails = await getAdminEmails();
+
+    await Promise.allSettled([
+      emailService.sendExtraToolsWarning(user, expectedToolName, normalizedExtraTools, drawer),
+      emailService.sendExtraToolsAdminAlert(adminEmails, user, expectedToolName, normalizedExtraTools, drawer)
+    ]);
+
+    res.json({
+      success: true,
+      message: 'Avertissement envoyé',
+      data: {
+        userEmail: user.email,
+        adminEmails,
+        expectedToolName,
+        extraToolNames: normalizedExtraTools
+      }
+    });
+  } catch (error) {
+    console.error('Erreur sendExtraToolsWarning:', error);
     res.status(500).json({
       success: false,
       message: 'Erreur serveur'
@@ -552,7 +652,8 @@ export const validateBorrowProduct = async (req: Request, res: Response): Promis
       return;
     }
 
-    uploadedFilePath = file.path;
+    const imagePath = file.path as string;
+    uploadedFilePath = imagePath;
 
     // Récupérer l'emprunt
     const borrow = await prisma.borrow.findUnique({
@@ -583,7 +684,7 @@ export const validateBorrowProduct = async (req: Request, res: Response): Promis
 
     // Valider le produit avec l'IA
     const validationResult = await aiValidationService.validateProductInImage(
-      uploadedFilePath,
+      imagePath,
       borrow.tool.name,
       0.5 // confiance minimum de 50%
     );
@@ -595,12 +696,12 @@ export const validateBorrowProduct = async (req: Request, res: Response): Promis
       data: {
         borrowId: id,
         toolId: borrow.toolId,
-        isValid: validationResult.success && validationResult.is_valid,
+        isValid: Boolean(validationResult.success && validationResult.is_valid),
         expectedProduct: validationResult.expected_product || borrow.tool.name,
         detectedProduct: validationResult.detected_product || null,
         confidence: validationResult.confidence || 0,
-        allDetections: validationResult.all_detections || null,
-        imagePath: uploadedFilePath
+        allDetections: validationResult.all_detections ?? undefined,
+        imagePath
       }
     });
 

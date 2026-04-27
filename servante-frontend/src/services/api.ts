@@ -223,6 +223,17 @@ export const borrowsAPI = {
   getAll: async () => {
     const response = await api.get('/borrows');
     return response.data;
+  },
+
+  // Avertir lorsqu'un utilisateur prend plus d'outils que prévu
+  sendExtraToolsWarning: async (data: {
+    userId: string;
+    expectedToolName: string;
+    extraToolNames: string[];
+    drawer?: string;
+  }) => {
+    const response = await api.post('/borrows/warnings/extra-tools', data);
+    return response.data;
   }
 };
 

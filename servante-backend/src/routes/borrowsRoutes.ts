@@ -10,7 +10,8 @@ import {
   updateBorrowStatuses,
   getBorrowsStats,
   markAsReturned,
-  validateBorrowProduct
+  validateBorrowProduct,
+  sendExtraToolsWarning
 } from '../controllers/borrowsController';
 import { protect } from '../middleware/authMiddleware';
 import multer from 'multer';
@@ -38,6 +39,7 @@ router.post('/return-all', returnAllBorrows);      // POST /api/borrows/return-a
 router.get('/user/:userId', getBorrowsByUser);     // GET /api/borrows/user/:userId
 router.get('/stats/overview', getBorrowsStats);    // GET /api/borrows/stats/overview
 router.put('/update-statuses', updateBorrowStatuses);
+router.post('/warnings/extra-tools', sendExtraToolsWarning);
 router.get('/:id', getBorrowById);                 // GET /api/borrows/:id
 router.put('/:id/return', returnBorrow);           // PUT /api/borrows/:id/return
 router.post('/:id/mark-returned', markAsReturned); // POST /api/borrows/:id/mark-returned

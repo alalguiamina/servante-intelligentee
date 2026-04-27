@@ -17,7 +17,7 @@ interface DetectionResult {
 
 interface DrawerOpeningGuardProps {
   drawerId: '1' | '2' | '3' | '4';
-  onComplete: () => void;
+  onComplete: (snapshot: Detection[]) => void;
 }
 
 const CAPTURE_W = 640;
@@ -60,6 +60,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
   const handCountRef       = useRef(0);
   const clearCountRef      = useRef(0);
   const bestPreHandSnapRef = useRef<string[]>([]);
+  const bestDetections1Ref = useRef<Detection[]>([]); // Full detections for ProductValidation
   const missingCountRef    = useRef<Record<string, number>>({});
   const stolenRef          = useRef<string[]>([]);
   const timerPausedRef     = useRef(false);
@@ -121,10 +122,10 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
     return () => clearInterval(t);
   }, [stopCamera]);
 
-  // safe → proceed to product-validation
+  // safe → proceed to product-validation with snapshot
   useEffect(() => {
     if (phase === 'safe') {
-      const t = setTimeout(onComplete, 1500);
+      const t = setTimeout(() => onComplete(bestDetections1Ref.current), 1500);
       return () => clearTimeout(t);
     }
   }, [phase, onComplete]);
@@ -180,6 +181,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
               handCountRef.current = 0;
               if (toolClasses.length >= bestPreHandSnapRef.current.length) {
                 bestPreHandSnapRef.current = [...toolClasses];
+                bestDetections1Ref.current = dets.filter(d => d.class.toLowerCase() !== 'main');
               }
             }
           }

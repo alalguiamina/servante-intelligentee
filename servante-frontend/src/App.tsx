@@ -182,7 +182,7 @@ type Screen =
   | 'tool-selection'
   | 'confirm-borrow'
   | 'drawer-open'
-  | 'drawer-opening-guard'
+  | 'drawer-closing-guard'
   | 'product-validation'
   | 'admin-login'
   | 'user-login'
@@ -1167,6 +1167,7 @@ export default function App() {
   const [validationRequired, setValidationRequired] = useState(false);
   const [detectionRetryKey, setDetectionRetryKey] = useState(0);
   const [guardDrawerId, setGuardDrawerId] = useState<'1'|'2'|'3'|'4' | null>(null);
+  const [guardSnapshot, setGuardSnapshot] = useState<any[]>([]); // Detection[] from DrawerOpeningGuard
 
   // États pour le scan YOLO du tiroir
   const [drawerScanResult, setDrawerScanResult] = useState<DrawerScanResult | null>(null);
@@ -2347,7 +2348,7 @@ export default function App() {
           setActiveBorrowId(activeBorrow.id);
 
           if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
-            // Ouvrir le tiroir et lancer la détection YOLO unifiée (25s main + 10s tool)
+            // Ouvrir le tiroir et lancer la détection YOLO unifiée pendant la course moteur.
             // Le retour est enregistré en DB SEULEMENT après validation YOLO réussie
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
               console.warn('⚠️ Tiroir non disponible');
@@ -2371,16 +2372,19 @@ export default function App() {
             }
           }
         } else {
-          // ✅ MODE EMPRUNT — ouvrir le tiroir puis lancer la détection YOLO unifiée (25s main + 10s tool)
+          // ✅ MODE EMPRUNT — ouvrir le tiroir puis lancer la détection YOLO unifiée pendant la course moteur.
           // L'emprunt est enregistré en DB SEULEMENT après validation YOLO réussie
           if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
               console.warn('⚠️ Tiroir non disponible');
             });
             setGuardDrawerId(selectedTool.drawer as '1' | '2' | '3' | '4');
+            setDetectionRetryKey(0);
+            setCurrentScreen('product-validation');
+          } else {
+            setDetectionRetryKey(0);
+            setCurrentScreen('product-validation');
           }
-          setDetectionRetryKey(0);
-          setCurrentScreen('product-validation');
         }
       } catch (error: any) {
         console.error('❌ Erreur:', error);
@@ -4512,6 +4516,7 @@ export default function App() {
       setActiveBorrowId(null);
       setValidationRequired(false);
       setIsReturnMode(false);
+      setGuardSnapshot([]); // Clear snapshot after validation
     };
 
     return (
@@ -4522,6 +4527,7 @@ export default function App() {
         drawerId={selectedTool.drawer || undefined}
         action={isReturnMode ? 'return' : 'borrow'}
         isRetry={detectionRetryKey > 0}
+        initialSnapshot={guardSnapshot.length > 0 ? guardSnapshot : undefined}
         onValidationSuccess={async () => {
           if (isReturnMode && activeBorrowId) {
             await borrowsAPI.markAsReturned(activeBorrowId);
@@ -4531,7 +4537,7 @@ export default function App() {
             if (result.success) {
               showToast('✅ Emprunt confirmé !', 'success', 3000);
             } else {
-              showToast(`❌ ${t('borrowError')}`, 'error', 3000);
+              showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
             }
           }
           // Save drawer ID before resetting, then go to closing guard
@@ -4576,7 +4582,7 @@ export default function App() {
           if (result.success) {
             showToast(`✅ Emprunt de "${wrongToolName}" confirmé !`, 'success', 3000);
           } else {
-            showToast(`❌ ${t('borrowError')}`, 'error', 3000);
+            showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
           }
           const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           resetValidation();
@@ -4588,6 +4594,20 @@ export default function App() {
           }
           await loadBorrowsFromBackend();
           await loadToolsFromBackend();
+        }}
+        onExtraToolsDetected={async (extraToolNames: string[]) => {
+          if (!currentUser || !selectedTool) return;
+          try {
+            await borrowsAPI.sendExtraToolsWarning({
+              userId: currentUser.id,
+              expectedToolName: selectedTool.name,
+              extraToolNames,
+              drawer: selectedTool.drawer,
+            });
+            showToast('⚠️ Avertissement envoyé à l’utilisateur et à l’administrateur', 'info', 4000);
+          } catch (error) {
+            console.warn('Erreur envoi avertissement outils supplémentaires:', error);
+          }
         }}
         onSkip={() => {
           const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
@@ -4610,7 +4630,8 @@ export default function App() {
     return (
       <DrawerOpeningGuard
         drawerId={guardDrawerId}
-        onComplete={() => {
+        onComplete={(snapshot) => {
+          setGuardSnapshot(snapshot);
           setCurrentScreen('product-validation');
         }}
       />

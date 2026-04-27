@@ -7,10 +7,12 @@ interface ProductValidationProps {
   drawerId?: string;
   action?: 'borrow' | 'return';
   isRetry?: boolean;
+  initialSnapshot?: any[]; // Detection[] from DrawerOpeningGuard
   onValidationSuccess: () => void;
   onValidationFailure: (reason: string) => void;
   onRetry?: () => void;
   onBorrowAlternative?: (wrongToolName: string) => void;
+  onExtraToolsDetected?: (extraToolNames: string[]) => void;
   onSkip?: () => void;
 }
 
@@ -20,10 +22,12 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
   drawerId,
   action = 'borrow',
   isRetry = false,
+  initialSnapshot,
   onValidationSuccess,
   onValidationFailure,
   onRetry,
   onBorrowAlternative,
+  onExtraToolsDetected,
 }) => {
   return (
     <RealtimeDetection
@@ -32,10 +36,12 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
       drawerId={drawerId}
       action={action}
       isRetry={isRetry}
+      initialSnapshot={initialSnapshot}
       onDetectionSuccess={onValidationSuccess}
       onDetectionFailure={onValidationFailure}
       onRetry={onRetry ?? (() => onValidationFailure("Détection annulée — réessayez depuis la sélection d'outil."))}
       onBorrowAlternative={onBorrowAlternative}
+      onExtraToolsDetected={onExtraToolsDetected}
     />
   );
 };

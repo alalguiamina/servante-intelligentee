@@ -8,10 +8,12 @@ interface RealtimeDetectionProps {
   drawerId?: string;
   action?: 'borrow' | 'return';
   isRetry?: boolean;
+  initialSnapshot?: Detection[];
   onDetectionSuccess: () => void;
   onDetectionFailure: (reason: string) => void;
   onRetry: () => void;
   onBorrowAlternative?: (wrongToolName: string) => void;
+  onExtraToolsDetected?: (extraToolNames: string[]) => void;
 }
 
 interface Detection {
@@ -81,7 +83,10 @@ const normalize = (s: string) =>
 
 const DURATION       = 35; // initial borrow/return
 const RETRY_DURATION = 20; // after wrong tool taken and retrying
-const ACTION_AT      = 10; // when timeRemaining hits this, phase 1 ends → action phase
+const ACTION_PHASE_SECONDS = 10;
+const DRAWER_OPEN_TRAVEL_SECONDS = Number(import.meta.env.VITE_DRAWER_OPEN_TRAVEL_SECONDS ?? 4);
+const HAND_CONFIRM_FRAMES = 2;
+const CLEAR_CONFIRM_FRAMES = 4;
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -113,7 +118,8 @@ function phase1Conformity(
 type DetectionStatus =
   | { code: 'C1' | 'C2'; ok: true; message: string }
   | { code: 'E1'; ok: false; message: string; canRetry: boolean; wrongToolName: string }
-  | { code: 'E2' | 'E3' | 'E4' | 'E6'; ok: false; message: string; canRetry: boolean };
+  | { code: 'E2' | 'E4' | 'E6'; ok: false; message: string; canRetry: boolean }
+  | { code: 'E3'; ok: false; message: string; canRetry: boolean; extraToolNames: string[] };
 
 function phase2Status(
   snap1Names: string[],
@@ -127,7 +133,7 @@ function phase2Status(
     const wrongTaken  = taken.filter(s => normalize(s) !== normalize(toolName));
 
     if (wrongTaken.length > 0 && targetTaken)
-      return { code: 'E3', ok: false, message: `Plusieurs outils pris simultanément : ${taken.join(', ')}.`, canRetry: true };
+      return { code: 'E3', ok: false, message: `Plusieurs outils pris simultanément : ${taken.join(', ')}.`, canRetry: true, extraToolNames: wrongTaken };
     if (wrongTaken.length > 0 && !targetTaken)
       return { code: 'E1', ok: false, message: `Mauvais outil pris : "${wrongTaken[0]}" au lieu de "${toolName}".`, canRetry: true, wrongToolName: wrongTaken[0] };
     if (!targetTaken)
@@ -153,11 +159,22 @@ const CAPTURE_W = 640;
 const CAPTURE_H = 360;
 
 const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
-  toolName, drawerId, action = 'borrow', isRetry = false, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative,
+  toolName, drawerId, action = 'borrow', isRetry = false, initialSnapshot, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative, onExtraToolsDetected,
 }) => {
   // Shorter timer only for borrow retries (quick re-pick); returns always need full time
-  const totalDuration = (isRetry && action === 'borrow') ? RETRY_DURATION : DURATION;
-  const isHandDetectionPhase = action === 'borrow' && !isRetry && drawerId; // Start with hand detection only for initial borrow
+  const drawerTravelSeconds = Math.max(1, DRAWER_OPEN_TRAVEL_SECONDS);
+
+  // If initialSnapshot provided (from DrawerOpeningGuard), skip hand-detection and go straight to action phase (10s)
+  const hasInitialSnapshot = initialSnapshot && initialSnapshot.length > 0;
+  const totalDuration = hasInitialSnapshot
+    ? ACTION_PHASE_SECONDS  // Just the 10s action phase
+    : (isRetry && action === 'borrow')
+    ? RETRY_DURATION
+    : !isRetry && drawerId
+    ? drawerTravelSeconds + ACTION_PHASE_SECONDS
+    : DURATION;
+  const actionStartAt = ACTION_PHASE_SECONDS;
+  const isHandDetectionPhase = !hasInitialSnapshot && !isRetry && Boolean(drawerId); // Skip hand-detection if we have initial snapshot
   const initialPhase: Phase = isHandDetectionPhase ? 'hand-detection' : 'detecting';
   const videoRef   = useRef<HTMLVideoElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
@@ -172,6 +189,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const cancelPendingToolRef    = useRef<string | null>(null);
   const returnConfirmCountRef   = useRef(0); // consecutive frames where wrong tool detected in drawer
   const actionRef               = useRef(action);
+  const phaseRef                = useRef<Phase>(initialPhase);
   // ── Hand detection refs (from DrawerOpeningGuard) ───────────────────────
   const handCountRef         = useRef(0);
   const clearCountRef        = useRef(0);
@@ -200,8 +218,21 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   useEffect(() => { lastDetectionsRef.current = detections; }, [detections]);
   useEffect(() => { cancelPendingToolRef.current = cancelPendingTool; }, [cancelPendingTool]);
   useEffect(() => { actionRef.current = action; }, [action]);
+  useEffect(() => {
+    phaseRef.current = phase;
+    timerPausedRef.current = phase === 'hand-detected' || phase === 'alert';
+  }, [phase]);
   const serverReadyRef = useRef(false);
   useEffect(() => { serverReadyRef.current = serverReady; }, [serverReady]);
+
+  // ── Initialize with snapshot from DrawerOpeningGuard (if provided) ──────────
+  useEffect(() => {
+    if (initialSnapshot && initialSnapshot.length > 0) {
+      bestSnapshot1Ref.current = [...initialSnapshot];
+      snapshot1SavedRef.current = true;
+      setSnapshot1([...initialSnapshot]);
+    }
+  }, [initialSnapshot]);
 
   // ── Fetch drawer tools on mount (needed for live phase-1 indicator) ────────
   useEffect(() => {
@@ -241,10 +272,10 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     setCameraRestartKey(k => k + 1);
   }, []);
 
-  // ── At phase boundary (25s): transition from hand-detection to detecting, freeze snap1 ──
+  // Transition from drawer travel / hand detection to tool action.
   useEffect(() => {
-    if (timeRemaining === ACTION_AT && !snapshot1SavedRef.current) {
-      // Transition from hand detection (first 25s) to tool detection (last 10s)
+    if (timeRemaining === actionStartAt && !snapshot1SavedRef.current) {
+      // The travel duration is configurable to match the real motor course.
       if (phase === 'hand-detection') {
         setPhase('detecting');
       }
@@ -257,7 +288,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         setPhase1Result(p1); // kept for display, never blocks
       }
     }
-  }, [timeRemaining, drawerTools, toolName, action, phase]);
+  }, [timeRemaining, drawerTools, toolName, action, phase, actionStartAt]);
 
   // ── Timer end: capture snap2 explicitly, then show comparison ───────────────
   const onTimerEnd = useCallback(() => {
@@ -281,13 +312,13 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
       setTimeRemaining(prev => {
         if (timerPausedRef.current) return prev;
         // Freeze Phase 1 countdown until YOLO gives its first response (model loaded)
-        if (!serverReadyRef.current && prev > ACTION_AT) return prev;
+        if (!serverReadyRef.current && prev > actionStartAt) return prev;
         if (prev <= 1) { clearInterval(timer); onTimerEnd(); return 0; }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [onTimerEnd]);
+  }, [onTimerEnd, actionStartAt]);
 
   // ── Start camera (rear on mobile, any camera on desktop) ─────────────────
   useEffect(() => {
@@ -349,12 +380,79 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
               if (result.annotated_image) setAnnotatedImage(result.annotated_image);
               if (result.detections) {
                 // Strip hand detections — "main" is never a borrowable tool
+                const hasHand = result.detections.some(d => d.class.toLowerCase() === 'main');
                 const toolDets = result.detections.filter(d => d.class.toLowerCase() !== 'main');
+                const toolNames = toDisplayNames(toolDets);
+                const currentPhase = phaseRef.current;
                 // Update ref directly (no React render delay) so onTimerEnd always gets latest
                 lastDetectionsRef.current = toolDets;
                 setDetections(toolDets);
+                if (currentPhase === 'hand-detection') {
+                  if (hasHand) {
+                    clearCountRef.current = 0;
+                    handCountRef.current += 1;
+                    if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
+                      handCountRef.current = 0;
+                      missingCountRef.current = {};
+                      hardwareAPI.stopMotors().catch(() => {});
+                      setPhase('hand-detected');
+                    }
+                  } else {
+                    handCountRef.current = 0;
+                    if (toolNames.length >= bestPreHandSnapRef.current.length) {
+                      bestPreHandSnapRef.current = [...toolNames];
+                    }
+                  }
+                } else if (currentPhase === 'hand-detected') {
+                  if (!hasHand) {
+                    clearCountRef.current += 1;
+                    bestPreHandSnapRef.current.forEach(name => {
+                      const present = toolNames.some(current => normalize(current) === normalize(name));
+                      if (!present) {
+                        missingCountRef.current[name] = (missingCountRef.current[name] ?? 0) + 1;
+                      }
+                    });
+                    if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
+                      clearCountRef.current = 0;
+                      const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2);
+                      const stolen = bestPreHandSnapRef.current.filter(
+                        name => (missingCountRef.current[name] ?? 0) >= threshold
+                      );
+                      missingCountRef.current = {};
+                      if (stolen.length > 0) {
+                        stolenRef.current = stolen;
+                        setStolenTools(stolen);
+                        setPhase('alert');
+                      } else {
+                        hardwareAPI.openDrawer(drawerId as '1' | '2' | '3' | '4').catch(() => {});
+                        setPhase('hand-detection');
+                      }
+                    }
+                  } else {
+                    clearCountRef.current = 0;
+                  }
+                } else if (currentPhase === 'alert') {
+                  const allBack = stolenRef.current.every(name =>
+                    toolNames.some(current => normalize(current) === normalize(name))
+                  );
+                  if (allBack && !hasHand) {
+                    clearCountRef.current += 1;
+                    if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
+                      clearCountRef.current = 0;
+                      stolenRef.current = [];
+                      setStolenTools([]);
+                      bestPreHandSnapRef.current = [...toolNames];
+                      missingCountRef.current = {};
+                      hardwareAPI.openDrawer(drawerId as '1' | '2' | '3' | '4').catch(() => {});
+                      setPhase('hand-detection');
+                    }
+                  } else {
+                    clearCountRef.current = 0;
+                  }
+                }
+
                 // Phase 1: keep best snapshot (most tools = drawer fully visible)
-                if (!snapshot1SavedRef.current && toolDets.length > 0) {
+                if (!snapshot1SavedRef.current && currentPhase === 'hand-detection' && !hasHand && toolDets.length > 0) {
                   if (toolDets.length >= bestSnapshot1Ref.current.length) {
                     bestSnapshot1Ref.current = [...toolDets];
                     setSnapshot1([...toolDets]);
@@ -557,6 +655,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         onRetry={onRetry}
         onBorrowAlternative={onBorrowAlternative}
         onReturnAndCancel={handleReturnAndCancel}
+        onExtraToolsDetected={onExtraToolsDetected}
       />
     );
   }
@@ -573,7 +672,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   }
 
   // ── Phase: DETECTING ──────────────────────────────────────────────────────
-  const inActionPhase  = timeRemaining <= ACTION_AT;
+  const inActionPhase  = timeRemaining <= actionStartAt;
   const detectedNames  = toDisplayNames(detections);
   const snap1Names     = toDisplayNames(snapshot1);
 
@@ -587,7 +686,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   const actionPrompt = action === 'return'
     ? "Replacez l'outil dans le tiroir, puis retirez votre main"
-    : phase === 'detecting' && timeRemaining <= ACTION_AT
+    : phase === 'detecting' && timeRemaining <= actionStartAt
     ? "Prenez l'outil maintenant"
     : "Veuillez prendre l'outil maintenant";
 
@@ -609,10 +708,48 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
           <p className="text-center text-xs font-bold uppercase tracking-widest mb-5 mt-1">
             {phase === 'hand-detection'
               ? <span className="text-purple-600">Phase 0 — Surveillance de la main ({timeRemaining}s)</span>
+              : phase === 'hand-detected'
+              ? <span className="text-amber-600">Main detectee - moteur arrete</span>
+              : phase === 'alert'
+              ? <span className="text-red-600">Outil manquant - moteur bloque</span>
               : inActionPhase
               ? <span className="text-amber-600">Phase 2 — Action ({timeRemaining}s)</span>
               : <span className="text-blue-500">Phase 1 — Scan du tiroir ({timeRemaining}s)</span>}
           </p>
+
+          {phase === 'hand-detected' && (
+            <div className="mb-4 rounded-xl border-2 border-amber-400 bg-amber-50 px-5 py-4 flex items-center gap-4 animate-pulse">
+              <AlertTriangle className="w-7 h-7 text-amber-500 flex-shrink-0" />
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-600 mb-0.5">Moteur arrete</p>
+                <p className="text-lg font-bold text-amber-800">Levez votre main pour continuer la verification.</p>
+              </div>
+            </div>
+          )}
+
+          {phase === 'alert' && (
+            <div className="mb-4 rounded-xl border-2 border-red-400 bg-red-50 px-5 py-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-7 h-7 text-red-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-xs font-bold uppercase tracking-wide text-red-600 mb-1">Moteur bloque</p>
+                  <p className="text-lg font-bold text-red-800 mb-2">
+                    Remettez l'outil manquant dans le tiroir.
+                  </p>
+                  <ul className="space-y-1">
+                    {stolenTools.map(name => (
+                      <li key={name} className="text-sm font-semibold text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
+                        {name}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-red-600 mt-2">
+                    Le chrono reprend automatiquement des que l'outil est detecte de nouveau.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Action prompt banner (phase 2) */}
           {inActionPhase && (
@@ -867,6 +1004,7 @@ interface ComparisonProps {
   onRetry: () => void;
   onBorrowAlternative?: (wrongToolName: string) => void;
   onReturnAndCancel?: (wrongToolName: string) => void;
+  onExtraToolsDetected?: (extraToolNames: string[]) => void;
 }
 
 const statusConfig: Record<string, { bg: string; border: string; icon: React.ReactNode; label: string }> = {
@@ -882,7 +1020,7 @@ const statusConfig: Record<string, { bg: string; border: string; icon: React.Rea
 const ComparisonScreen: React.FC<ComparisonProps> = ({
   drawerId, toolName, action, drawerTools, loadingDrawer,
   snapshot1, snapshot2, annotatedImage,
-  onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel,
+  onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel, onExtraToolsDetected,
 }) => {
   const snap1Names = toDisplayNames(snapshot1);
   const snap2Names = toDisplayNames(snapshot2);
@@ -890,6 +1028,14 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
   const p1 = phase1Conformity(snap1Names, drawerTools, toolName, action);
   const p2 = phase2Status(snap1Names, snap2Names, toolName, action);
   const cfg = statusConfig[p2.code];
+  const warningSentRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (p2.code === 'E3' && action === 'borrow' && !warningSentRef.current) {
+      warningSentRef.current = true;
+      onExtraToolsDetected?.(p2.extraToolNames);
+    }
+  }, [action, onExtraToolsDetected, p2]);
 
   const validateLabel = action === 'return' ? 'Valider le retour' : "Valider l'emprunt";
 
