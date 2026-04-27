@@ -51,7 +51,7 @@ const DISPLAY: Record<string, string> = {
   'multimetre': 'Multimètre', 'multimetre fils': 'Multimètre fils',
   'perceuse': 'Perceuse', 'pied coulisse': 'Pied à coulisse',
   'pince plat': 'Mini pince à bec plat', 'pince rond': 'Mini pince à bec rond',
-  'rouge plat': 'Pince à bec plat',
+  'Rouge plat': 'Pince à bec plat',
 };
 const displayName = (cls: string) => DISPLAY[cls] ?? cls;
 
@@ -68,6 +68,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const missingCountRef     = useRef<Record<string, number>>({});
   const stolenRef           = useRef<string[]>([]);
   const timerPausedRef      = useRef(false);
+  const borrowAutoTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Motor state tracking — prevents sending commands to a motor already at end-stop
   const motorRunningRef          = useRef(true);  // true while we believe the motor is still moving
@@ -85,12 +86,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const [timeLeft,             setTimeLeft]             = useState(GUARD_SECONDS);
   const [borrowConfirmLoading, setBorrowConfirmLoading] = useState(false);
   const [drawerWasMoving,      setDrawerWasMoving]      = useState(false);
-
-  // Pause timer during borrow-confirm and alert
-  useEffect(() => {
-    phaseRef.current = phase;
-    timerPausedRef.current = phase === 'alert' || phase === 'borrow-confirm';
-  }, [phase]);
+  const [autoBorrowCountdown,  setAutoBorrowCountdown]  = useState(8);
 
   const stopCamera = useCallback(() => {
     if (videoRef.current?.srcObject) {
@@ -109,12 +105,67 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     }, DRAWER_CLOSE_MS);
   }, []);
 
+  // Pause timer during borrow-confirm and alert
+  useEffect(() => {
+    phaseRef.current = phase;
+    timerPausedRef.current = phase === 'alert' || phase === 'borrow-confirm';
+  }, [phase]);
+
+  // Auto-borrow timer: 8 seconds to auto-confirm if user doesn't click
+  useEffect(() => {
+    if (phase !== 'borrow-confirm') return;
+
+    setAutoBorrowCountdown(8);
+    let isActive = true;
+    const timer = setInterval(() => {
+      setAutoBorrowCountdown(prev => {
+        if (prev <= 1 && isActive) {
+          clearInterval(timer);
+          // Auto-borrow after 8 seconds
+          if (stolenRef.current.length > 0) {
+            (async () => {
+              setBorrowConfirmLoading(true);
+              try {
+                await onBorrowStolenTools?.(stolenRef.current);
+              } catch (error) {
+                console.error('Error borrowing tools:', error);
+              } finally {
+                setBorrowConfirmLoading(false);
+              }
+              stolenRef.current = [];
+              setStolenTools([]);
+              lastFrameBeforeHandRef.current = [];
+              if (motorStoppedByUsRef.current) {
+                hardwareAPI.closeDrawer(drawerId).catch(() => {});
+                motorStoppedByUsRef.current = false;
+                startCloseTimer();
+                setTimeLeft(CLOSE_RESUME_SECONDS);
+              }
+              phaseRef.current = 'monitoring';
+              setPhase('monitoring');
+            })();
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    borrowAutoTimerRef.current = timer as any;
+
+    return () => {
+      isActive = false;
+      clearInterval(timer);
+      borrowAutoTimerRef.current = null;
+    };
+  }, [phase, onBorrowStolenTools, drawerId, startCloseTimer]);
+
   // Command drawer to close on mount and start motor timer
   useEffect(() => {
     hardwareAPI.closeDrawer(drawerId).catch(() => {});
     startCloseTimer();
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      if (borrowAutoTimerRef.current) clearTimeout(borrowAutoTimerRef.current);
     };
   }, [drawerId, startCloseTimer]);
 
@@ -318,9 +369,17 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   // ── Handlers borrow-confirm ───────────────────────────────────────────────
 
   const handleConfirmBorrow = async () => {
+    // Clear the auto-borrow timer
+    if (borrowAutoTimerRef.current) {
+      clearTimeout(borrowAutoTimerRef.current);
+      borrowAutoTimerRef.current = null;
+    }
+
     setBorrowConfirmLoading(true);
     try {
       await onBorrowStolenTools?.(stolenRef.current);
+    } catch (error) {
+      console.error('Error borrowing tools:', error);
     } finally {
       setBorrowConfirmLoading(false);
     }
@@ -338,6 +397,11 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   };
 
   const handleDeclineBorrow = () => {
+    // Clear the auto-borrow timer
+    if (borrowAutoTimerRef.current) {
+      clearTimeout(borrowAutoTimerRef.current);
+      borrowAutoTimerRef.current = null;
+    }
     phaseRef.current = 'alert';
     setPhase('alert');
   };
@@ -413,6 +477,9 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
             </ul>
             <p className="text-sm font-semibold text-blue-800 mb-3 text-center">
               Voulez-vous emprunter {stolenTools.length > 1 ? 'ces outils' : 'cet outil'} ?
+            </p>
+            <p className="text-xs text-blue-600 mb-3 text-center font-medium">
+              Auto-confirmation dans {autoBorrowCountdown}s si vous ne cliquez pas
             </p>
             <div className="flex gap-3">
               <button

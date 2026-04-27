@@ -47,7 +47,7 @@ const DISPLAY: Record<string, string> = {
   'multimetre': 'Multimètre', 'multimetre fils': 'Multimètre fils',
   'perceuse': 'Perceuse', 'pied coulisse': 'Pied à coulisse',
   'pince plat': 'Mini pince à bec plat', 'pince rond': 'Mini pince à bec rond',
-  'rouge plat': 'Pince à bec plat',
+  'Rouge plat': 'Pince à bec plat',
 };
 const displayName = (cls: string) => DISPLAY[cls] ?? cls;
 

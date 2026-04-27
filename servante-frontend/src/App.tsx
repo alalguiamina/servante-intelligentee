@@ -4560,29 +4560,34 @@ export default function App() {
         isRetry={detectionRetryKey > 0}
         initialSnapshot={guardSnapshot.length > 0 ? guardSnapshot : undefined}
         onValidationSuccess={async () => {
-          if (isReturnMode && activeBorrowId) {
-            await borrowsAPI.markAsReturned(activeBorrowId);
-            showToast('✅ Retour validé !', 'success', 3000);
-          } else {
-            const result = await borrowsAPI.borrow(currentUser!.id, selectedTool.id, 1);
-            if (result.success) {
-              showToast('✅ Emprunt confirmé !', 'success', 3000);
-            } else {
-              showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
-            }
-          }
-          // Save drawer ID before resetting, then go to closing guard
-          // (guard handles closeDrawer itself + monitors for theft during closing)
+          // Capture dId before any await so it's always available even if the API throws
           const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
-          resetValidation();
-          if (dId && ['1','2','3','4'].includes(dId)) {
-            setGuardDrawerId(dId);
-            setCurrentScreen('drawer-closing-guard');
-          } else {
-            setCurrentScreen('tool-selection');
+          try {
+            if (isReturnMode && activeBorrowId) {
+              await borrowsAPI.markAsReturned(activeBorrowId);
+              showToast('✅ Retour validé !', 'success', 3000);
+            } else {
+              const result = await borrowsAPI.borrow(currentUser!.id, selectedTool.id, 1);
+              if (result.success) {
+                showToast('✅ Emprunt confirmé !', 'success', 3000);
+              } else {
+                showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
+              }
+            }
+          } catch {
+            showToast('❌ Erreur réseau — veuillez vérifier votre connexion', 'error', 4000);
+          } finally {
+            // Always navigate away so the spinner can never get stuck
+            resetValidation();
+            if (dId && ['1','2','3','4'].includes(dId)) {
+              setGuardDrawerId(dId);
+              setCurrentScreen('drawer-closing-guard');
+            } else {
+              setCurrentScreen('tool-selection');
+            }
+            loadBorrowsFromBackend().catch(() => {});
+            loadToolsFromBackend().catch(() => {});
           }
-          await loadBorrowsFromBackend();
-          await loadToolsFromBackend();
         }}
         onValidationFailure={async (reason) => {
           const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
@@ -4594,37 +4599,41 @@ export default function App() {
           } else {
             setCurrentScreen('tool-selection');
           }
-          await loadBorrowsFromBackend();
-          await loadToolsFromBackend();
+          loadBorrowsFromBackend().catch(() => {});
+          loadToolsFromBackend().catch(() => {});
         }}
         onRetry={() => {
           setDetectionRetryKey(k => k + 1);
         }}
         onBorrowAlternative={async (wrongToolName: string) => {
-          // L'utilisateur a pris un autre outil et veut l'emprunter à la place
+          const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           const wrongTool = tools.find(
             t => t.name.toLowerCase().trim() === wrongToolName.toLowerCase().trim()
           );
-          if (!wrongTool || wrongTool.availableQuantity <= 0) {
-            showToast('Cet outil n\'est pas disponible', 'error', 3000);
-            return;
+          try {
+            if (!wrongTool || wrongTool.availableQuantity <= 0) {
+              showToast('Cet outil n\'est pas disponible', 'error', 3000);
+            } else {
+              const result = await borrowsAPI.borrow(currentUser!.id, wrongTool.id, 1);
+              if (result.success) {
+                showToast(`✅ Emprunt de "${wrongToolName}" confirmé !`, 'success', 3000);
+              } else {
+                showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
+              }
+            }
+          } catch {
+            showToast('❌ Erreur réseau — veuillez vérifier votre connexion', 'error', 4000);
+          } finally {
+            resetValidation();
+            if (dId && ['1','2','3','4'].includes(dId)) {
+              setGuardDrawerId(dId);
+              setCurrentScreen('drawer-closing-guard');
+            } else {
+              setCurrentScreen('tool-selection');
+            }
+            loadBorrowsFromBackend().catch(() => {});
+            loadToolsFromBackend().catch(() => {});
           }
-          const result = await borrowsAPI.borrow(currentUser!.id, wrongTool.id, 1);
-          if (result.success) {
-            showToast(`✅ Emprunt de "${wrongToolName}" confirmé !`, 'success', 3000);
-          } else {
-            showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
-          }
-          const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
-          resetValidation();
-          if (dId && ['1','2','3','4'].includes(dId)) {
-            setGuardDrawerId(dId);
-            setCurrentScreen('drawer-closing-guard');
-          } else {
-            setCurrentScreen('tool-selection');
-          }
-          await loadBorrowsFromBackend();
-          await loadToolsFromBackend();
         }}
         onExtraToolsDetected={async (extraToolNames: string[]) => {
           if (!currentUser || !selectedTool) return;

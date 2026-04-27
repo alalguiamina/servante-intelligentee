@@ -64,7 +64,7 @@ const CLASS_DISPLAY_NAMES: Record<string, string> = {
   'pied coulisse':         'Pied à coulisse',
   'pince plat':            'Mini pince à bec plat',
   'pince rond':            'Mini pince à bec rond',
-  'rouge plat':            'Pince à bec plat',
+  'Rouge plat':            'Pince à bec plat',
 };
 
 const getDisplayName = (raw: string) => {
@@ -188,6 +188,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const timerPausedRef       = useRef(false);
   const cancelPendingToolRef    = useRef<string | null>(null);
   const returnConfirmCountRef   = useRef(0); // consecutive frames where wrong tool detected in drawer
+  const retryCountRef        = useRef(0); // Track retry attempts to allow fresh detection
   const actionRef               = useRef(action);
   const phaseRef                = useRef<Phase>(initialPhase);
   // ── Hand detection refs (from DrawerOpeningGuard) ───────────────────────
@@ -202,6 +203,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const drawerOpenCommandSentRef = useRef(false); // true if we already sent the open command during this cycle (NEVER send twice)
   const drawerOpenTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const returnTimeLeftRef    = useRef(totalDuration);
+  const countdownTimerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [phase,             setPhase]             = useState<Phase>(initialPhase);
   const [timeRemaining,     setTimeRemaining]     = useState(totalDuration);
@@ -278,6 +280,46 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     setCameraRestartKey(k => k + 1);
   }, []);
 
+  // ── Proper retry: reset ALL detection state and restart from beginning ────
+  const handleFullRetry = useCallback(() => {
+    // Clear timers
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+
+    // Reset all detection state
+    isRunningRef.current = true;
+    lastDetectionsRef.current = [];
+    snapshot1SavedRef.current = false;
+    bestSnapshot1Ref.current = [];
+    bestSnapshot2Ref.current = [];
+    snapshot2Ref.current = [];
+    handCountRef.current = 0;
+    clearCountRef.current = 0;
+    bestPreHandSnapRef.current = [];
+    lastFrameBeforeHandRef.current = [];
+    missingCountRef.current = {};
+    stolenRef.current = [];
+    returnConfirmCountRef.current = 0;
+    cancelPendingToolRef.current = null;
+    drawerOpenCommandSentRef.current = false;
+    timerPausedRef.current = false;
+
+    // Reset UI state
+    setDetections([]);
+    setSnapshot1([]);
+    setAnnotatedImage(null);
+    setError(null);
+    setStolenTools([]);
+    setCancelPendingTool(null);
+    setPhase1Result(null);
+
+    // Restart camera and detection from initial phase
+    setCameraRestartKey(k => k + 1);
+    const newPhase: Phase = isHandDetectionPhase ? 'hand-detection' : 'detecting';
+    setPhase(newPhase);
+    setTimeRemaining(totalDuration);
+    retryCountRef.current += 1;
+  }, [isHandDetectionPhase, totalDuration]);
+
   // Transition from drawer travel / hand detection to tool action.
   useEffect(() => {
     if (timeRemaining === actionStartAt && !snapshot1SavedRef.current) {
@@ -315,6 +357,9 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   // ── Countdown ─────────────────────────────────────────────────────────────
   useEffect(() => {
+    // Clear any existing timer before starting a new one (important for retry)
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+
     const timer = setInterval(() => {
       setTimeRemaining(prev => {
         if (timerPausedRef.current) return prev;
@@ -324,8 +369,9 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         return prev - 1;
       });
     }, 1000);
+    countdownTimerRef.current = timer;
     return () => clearInterval(timer);
-  }, [onTimerEnd, actionStartAt]);
+  }, [onTimerEnd, actionStartAt, cameraRestartKey]);
 
   // ── Cleanup drawer timer on unmount (for return action) ────────────────────
   useEffect(() => {
@@ -485,7 +531,16 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                   }
                 }
                 // Phase 2 return: keep best snapshot (most tools = returned tool appeared)
-                if (snapshot1SavedRef.current && actionRef.current === 'return') {
+                // IMPROVED: Update if more tools detected, OR if this is a more recent valid snapshot
+                if (snapshot1SavedRef.current && actionRef.current === 'return' && toolDets.length > 0) {
+                  // Keep the snapshot with the most tools (best state of drawer with all returned items)
+                  // This helps capture the returned tool even if hand briefly occludes it
+                  if (toolDets.length >= bestSnapshot2Ref.current.length) {
+                    bestSnapshot2Ref.current = [...toolDets];
+                  }
+                }
+                // Phase 2 borrow: keep best snapshot (most tools = nothing taken yet, or best before taking)
+                if (snapshot1SavedRef.current && actionRef.current === 'borrow' && toolDets.length > 0) {
                   if (toolDets.length >= bestSnapshot2Ref.current.length) {
                     bestSnapshot2Ref.current = [...toolDets];
                   }
@@ -680,9 +735,9 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         captureRef={captureRef}
         cameraReady={cameraReady}
         detections={detections}
-        onConfirm={() => { isRunningRef.current = false; stopCamera(); setPhase('confirming'); onDetectionSuccess(); }}
+        onConfirm={() => { isRunningRef.current = false; stopCamera(); setPhase('confirming'); setTimeout(() => onDetectionSuccess(), 500); }}
         onCancel={() => { isRunningRef.current = false; stopCamera(); onDetectionFailure("Validation annulée par l'utilisateur."); }}
-        onRetry={onRetry}
+        onRetry={handleFullRetry}
         onBorrowAlternative={onBorrowAlternative}
         onReturnAndCancel={handleReturnAndCancel}
         onExtraToolsDetected={onExtraToolsDetected}
