@@ -183,8 +183,10 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const lastDetectionsRef    = useRef<Detection[]>([]);
   const snapshot1SavedRef    = useRef(false);
   const bestSnapshot1Ref     = useRef<Detection[]>([]); // best frame during phase 1 (most tools)
-  const bestSnapshot2Ref     = useRef<Detection[]>([]); // best frame during phase 2 (for return: most tools = returned tool present)
+  const bestSnapshot2Ref     = useRef<Detection[]>([]); // fallback: best frame during phase 2
   const snapshot2Ref         = useRef<Detection[]>([]);
+  const toolVoteMapRef       = useRef<Record<string, number>>({}); // Phase 2: per-tool detection count
+  const phase2FrameCountRef  = useRef(0);                          // Phase 2: total frames counted
   const timerPausedRef       = useRef(false);
   const cancelPendingToolRef    = useRef<string | null>(null);
   const returnConfirmCountRef   = useRef(0); // consecutive frames where wrong tool detected in drawer
@@ -292,6 +294,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     bestSnapshot1Ref.current = [];
     bestSnapshot2Ref.current = [];
     snapshot2Ref.current = [];
+    toolVoteMapRef.current = {};
+    phase2FrameCountRef.current = 0;
     handCountRef.current = 0;
     clearCountRef.current = 0;
     bestPreHandSnapRef.current = [];
@@ -331,6 +335,9 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
       drawerOpenCommandSentRef.current = false;
       // Freeze best snapshot for Phase 2 comparison
       snapshot1SavedRef.current = true;
+      // Reset Phase 2 vote counters so they only cover action-phase frames
+      toolVoteMapRef.current = {};
+      phase2FrameCountRef.current = 0;
       const best = bestSnapshot1Ref.current.length > 0 ? bestSnapshot1Ref.current : lastDetectionsRef.current;
       if (drawerTools.length > 0 && best.length > 0) {
         const snap1Names = toDisplayNames(best);
@@ -342,16 +349,19 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   // ── Timer end: capture snap2 explicitly, then show comparison ───────────────
   const onTimerEnd = useCallback(() => {
-    // For return: use best Phase 2 snapshot (most tools = returned tool is present).
-    // For borrow: use last detection (fewer tools = borrowed tool is gone).
-    // lastDetectionsRef is updated directly in the loop (no React render delay).
-    if (actionRef.current === 'return' && bestSnapshot2Ref.current.length > 0) {
+    const totalFrames = phase2FrameCountRef.current;
+    if (totalFrames >= 3) {
+      // Majority vote: a tool is "present" if detected in >50% of Phase 2 frames.
+      // This filters out single-frame false positives AND single-frame disappearances.
+      snapshot2Ref.current = Object.entries(toolVoteMapRef.current)
+        .filter(([, count]) => count / totalFrames > 0.5)
+        .map(([cls]) => ({ class: cls, confidence: 1, x: 0, y: 0, w: 0, h: 0 } as Detection));
+    } else if (bestSnapshot2Ref.current.length > 0) {
       snapshot2Ref.current = [...bestSnapshot2Ref.current];
     } else {
       snapshot2Ref.current = [...lastDetectionsRef.current];
     }
     if (!drawerId) { onDetectionSuccess(); return; }
-    // Keep detection running (isRunningRef.current stays true) so camera continues detecting during comparison
     setPhase('comparing');
   }, [drawerId, onDetectionSuccess]);
 
@@ -530,17 +540,13 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                     setSnapshot1([...toolDets]);
                   }
                 }
-                // Phase 2 return: keep best snapshot (most tools = returned tool appeared)
-                // IMPROVED: Update if more tools detected, OR if this is a more recent valid snapshot
-                if (snapshot1SavedRef.current && actionRef.current === 'return' && toolDets.length > 0) {
-                  // Keep the snapshot with the most tools (best state of drawer with all returned items)
-                  // This helps capture the returned tool even if hand briefly occludes it
-                  if (toolDets.length >= bestSnapshot2Ref.current.length) {
-                    bestSnapshot2Ref.current = [...toolDets];
-                  }
-                }
-                // Phase 2 borrow: keep best snapshot (most tools = nothing taken yet, or best before taking)
-                if (snapshot1SavedRef.current && actionRef.current === 'borrow' && toolDets.length > 0) {
+                // Phase 2: majority vote across all frames (robust against per-frame YOLO flickering)
+                if (snapshot1SavedRef.current) {
+                  phase2FrameCountRef.current++;
+                  toolDets.forEach(d => {
+                    toolVoteMapRef.current[d.class] = (toolVoteMapRef.current[d.class] ?? 0) + 1;
+                  });
+                  // Keep best-frame fallback in case we don't accumulate enough frames
                   if (toolDets.length >= bestSnapshot2Ref.current.length) {
                     bestSnapshot2Ref.current = [...toolDets];
                   }
