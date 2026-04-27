@@ -2347,14 +2347,14 @@ export default function App() {
           setActiveBorrowId(activeBorrow.id);
 
           if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
-            // Ouvrir le tiroir et lancer la détection YOLO
+            // Ouvrir le tiroir et lancer la détection YOLO unifiée (25s main + 10s tool)
             // Le retour est enregistré en DB SEULEMENT après validation YOLO réussie
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
               console.warn('⚠️ Tiroir non disponible');
             });
             setDetectionRetryKey(0);
             setGuardDrawerId(selectedTool.drawer as '1' | '2' | '3' | '4');
-            setCurrentScreen('drawer-opening-guard');
+            setCurrentScreen('product-validation');
           } else {
             // Pas de tiroir assigné — retour direct sans YOLO
             const result = await borrowsAPI.markAsReturned(activeBorrow.id);
@@ -2371,7 +2371,7 @@ export default function App() {
             }
           }
         } else {
-          // ✅ MODE EMPRUNT — ouvrir le tiroir puis lancer la détection YOLO
+          // ✅ MODE EMPRUNT — ouvrir le tiroir puis lancer la détection YOLO unifiée (25s main + 10s tool)
           // L'emprunt est enregistré en DB SEULEMENT après validation YOLO réussie
           if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
@@ -2380,7 +2380,7 @@ export default function App() {
             setGuardDrawerId(selectedTool.drawer as '1' | '2' | '3' | '4');
           }
           setDetectionRetryKey(0);
-          setCurrentScreen('drawer-opening-guard');
+          setCurrentScreen('product-validation');
         }
       } catch (error: any) {
         console.error('❌ Erreur:', error);

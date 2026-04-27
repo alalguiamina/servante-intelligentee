@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, AlertCircle, Loader, CheckCircle, AlertTriangle, Check, X, RefreshCw } from 'lucide-react';
-import { API_BASE_URL } from '../services/api';
+import { API_BASE_URL, hardwareAPI } from '../services/api';
 
 interface RealtimeDetectionProps {
   toolName: string;
@@ -85,7 +85,7 @@ const ACTION_AT      = 10; // when timeRemaining hits this, phase 1 ends → act
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-type Phase = 'detecting' | 'phase1-blocked' | 'comparing' | 'confirming' | 'return-wrong-tool';
+type Phase = 'hand-detection' | 'hand-detected' | 'alert' | 'detecting' | 'phase1-blocked' | 'comparing' | 'confirming' | 'return-wrong-tool';
 
 type P1Result = ReturnType<typeof phase1Conformity>;
 
@@ -157,6 +157,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 }) => {
   // Shorter timer only for borrow retries (quick re-pick); returns always need full time
   const totalDuration = (isRetry && action === 'borrow') ? RETRY_DURATION : DURATION;
+  const isHandDetectionPhase = action === 'borrow' && !isRetry && drawerId; // Start with hand detection only for initial borrow
+  const initialPhase: Phase = isHandDetectionPhase ? 'hand-detection' : 'detecting';
   const videoRef   = useRef<HTMLVideoElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
 
@@ -170,8 +172,14 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const cancelPendingToolRef    = useRef<string | null>(null);
   const returnConfirmCountRef   = useRef(0); // consecutive frames where wrong tool detected in drawer
   const actionRef               = useRef(action);
+  // ── Hand detection refs (from DrawerOpeningGuard) ───────────────────────
+  const handCountRef         = useRef(0);
+  const clearCountRef        = useRef(0);
+  const bestPreHandSnapRef   = useRef<string[]>([]);
+  const missingCountRef      = useRef<Record<string, number>>({});
+  const stolenRef            = useRef<string[]>([]);
 
-  const [phase,             setPhase]             = useState<Phase>('detecting');
+  const [phase,             setPhase]             = useState<Phase>(initialPhase);
   const [timeRemaining,     setTimeRemaining]     = useState(totalDuration);
   const [detections,        setDetections]        = useState<Detection[]>([]);
   const [snapshot1,         setSnapshot1]         = useState<Detection[]>([]);
@@ -185,6 +193,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const [phase1Result,      setPhase1Result]      = useState<P1Result | null>(null);
   const [cancelPendingTool, setCancelPendingTool] = useState<string | null>(null);
   const [cameraRestartKey,  setCameraRestartKey]  = useState(0);
+  // ── Hand detection states ───────────────────────────────────────────────
+  const [stolenTools,       setStolenTools]       = useState<string[]>([]);
 
   // Keep refs in sync — lastDetectionsRef is also updated directly in the loop to avoid React render delay
   useEffect(() => { lastDetectionsRef.current = detections; }, [detections]);
@@ -231,20 +241,23 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
     setCameraRestartKey(k => k + 1);
   }, []);
 
-  // ── At phase boundary: freeze snap1, check conformity, block if non-conformant ──
+  // ── At phase boundary (25s): transition from hand-detection to detecting, freeze snap1 ──
   useEffect(() => {
     if (timeRemaining === ACTION_AT && !snapshot1SavedRef.current) {
+      // Transition from hand detection (first 25s) to tool detection (last 10s)
+      if (phase === 'hand-detection') {
+        setPhase('detecting');
+      }
+      // Freeze best snapshot for Phase 2 comparison
       snapshot1SavedRef.current = true;
-      // Freeze best snapshot for Phase 2 comparison — informational only, no blocking.
-      // YOLO classification accuracy is too variable to hard-block on Phase 1 mismatches.
       const best = bestSnapshot1Ref.current.length > 0 ? bestSnapshot1Ref.current : lastDetectionsRef.current;
       if (drawerTools.length > 0 && best.length > 0) {
         const snap1Names = toDisplayNames(best);
         const p1 = phase1Conformity(snap1Names, drawerTools, toolName, action);
-        setPhase1Result(p1); // kept for display in ComparisonScreen, never blocks
+        setPhase1Result(p1); // kept for display, never blocks
       }
     }
-  }, [timeRemaining, drawerTools, toolName, action]);
+  }, [timeRemaining, drawerTools, toolName, action, phase]);
 
   // ── Timer end: capture snap2 explicitly, then show comparison ───────────────
   const onTimerEnd = useCallback(() => {
@@ -574,6 +587,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   const actionPrompt = action === 'return'
     ? "Replacez l'outil dans le tiroir, puis retirez votre main"
+    : phase === 'detecting' && timeRemaining <= ACTION_AT
+    ? "Prenez l'outil maintenant"
     : "Veuillez prendre l'outil maintenant";
 
   return (
@@ -592,7 +607,9 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
           {/* Phase label */}
           <p className="text-center text-xs font-bold uppercase tracking-widest mb-5 mt-1">
-            {inActionPhase
+            {phase === 'hand-detection'
+              ? <span className="text-purple-600">Phase 0 — Surveillance de la main ({timeRemaining}s)</span>
+              : inActionPhase
               ? <span className="text-amber-600">Phase 2 — Action ({timeRemaining}s)</span>
               : <span className="text-blue-500">Phase 1 — Scan du tiroir ({timeRemaining}s)</span>}
           </p>
@@ -606,6 +623,18 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
                 <p className="text-lg font-bold text-amber-800">{actionPrompt}</p>
               </div>
               <span className="ml-auto text-4xl font-black text-amber-600">{timeRemaining}</span>
+            </div>
+          )}
+
+          {/* Hand detection surveillance banner (phase 0) */}
+          {phase === 'hand-detection' && (
+            <div className="mb-4 rounded-xl border-2 border-purple-400 bg-purple-50 px-5 py-4 flex items-center gap-4">
+              <span className="text-3xl animate-bounce">🎥</span>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-purple-600 mb-0.5">Surveillance de sécurité</p>
+                <p className="text-lg font-bold text-purple-800">Détection de la main en cours — écartez votre main du tiroir</p>
+              </div>
+              <span className="ml-auto text-4xl font-black text-purple-600">{timeRemaining}</span>
             </div>
           )}
 
