@@ -327,12 +327,10 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     stolenRef.current = [];
     setStolenTools([]);
     lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
-    missingCountRef.current = {}; // ← Reset missing count
-    handCountRef.current = 0; // ← Reset hand detection counter
-    clearCountRef.current = 0; // ← Reset clear counter
     if (motorStoppedByUsRef.current) {
       hardwareAPI.closeDrawer(drawerId).catch(() => {});
-      startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
+      motorStoppedByUsRef.current = false;
+      startCloseTimer();
       setTimeLeft(CLOSE_RESUME_SECONDS);
     }
     phaseRef.current = 'monitoring';
