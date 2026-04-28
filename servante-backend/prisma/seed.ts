@@ -14,7 +14,7 @@ async function main() {
   await prisma.user.create({ data: { fullName: 'Ahmed Benali', email: 'ahmed.benali@emines.um6p.ma', badgeId: 'C416B819', role: 'STUDENT', password: 'ahmed123' } });
   await prisma.user.create({ data: { fullName: 'Fatima Zahra', email: 'fatima.zahra@emines.um6p.ma', badgeId: '53877F35', role: 'STUDENT', password: 'fatima123' } });
   await prisma.user.create({ data: { fullName: 'Karim Mansouri', email: 'karim.mansouri@emines.um6p.ma', badgeId: 'TEST202', role: 'PROFESSOR', password: 'karim123' } });
-  await prisma.user.create({ data: { fullName: 'Leila Berrada', email: 'leila.berrada@emines.um6p.ma', badgeId: 'TEST303', role: 'TECHNICIAN', password: 'leila123' } });
+  await prisma.user.create({ data: { fullName: 'Leila Berrada', email: 'leila.berrada@emines.um6p.ma', badgeId: 'test123', role: 'TECHNICIAN', password: 'leila123' } });
   await prisma.user.create({ data: { fullName: 'Sara Bennani', email: 'sara.bennani@emines.um6p.ma', badgeId: 'TEST101', role: 'STUDENT', password: 'sara123' } });
   await prisma.user.create({ data: { fullName: 'Youssef Alami', email: 'youssef.alami@emines.um6p.ma', badgeId: 'TEST789', role: 'STUDENT', password: 'youssef123' } });
 

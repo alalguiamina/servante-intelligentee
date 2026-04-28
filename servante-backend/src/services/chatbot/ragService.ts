@@ -22,21 +22,7 @@ interface SearchResult {
   distance?: number;
 }
 
-interface OllamaResponse {
-  model: string;
-  created_at: string;
-  response: string;
-  done: boolean;
-  context?: number[];
-  total_duration?: number;
-  load_duration?: number;
-  prompt_eval_count?: number;
-  prompt_eval_duration?: number;
-  eval_count?: number;
-  eval_duration?: number;
-}
-
-interface OllamaHealthStatus {
+interface GroqHealthStatus {
   available: boolean;
   models: string[];
   error?: string;
@@ -65,53 +51,56 @@ interface GenerateAnswerResult {
 // CONFIGURATION
 // ============================================
 
-const OLLAMA_CONFIG = {
-  baseUrl: process.env.OLLAMA_BASE_URL || process.env.OLLAMA_URL || 'http://servante_ollama:11434',
-  model: process.env.OLLAMA_MODEL || 'neural-chat:latest',
+const GROQ_CONFIG = {
+  apiKey: process.env.GROQ_API_KEY || '',
+  baseUrl: 'https://api.groq.com/openai/v1',
+  model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
   timeout: 60000,
 };
 
 const RAG_CONFIG = {
   topK: 3,
-  maxContextLength: 2000,
+  maxChunkLength: 800,  // truncate each chunk to this many chars before sending to LLM
   temperature: 0.3,
-  systemPrompt: `Tu es un assistant virtuel de la Servante Intelligente EMINES. Réponds de façon concise et directe en français, en te basant uniquement sur le CONTEXTE fourni. Si l'information est absente, dis-le brièvement.`,
+  systemPrompt: `Tu es un assistant virtuel de la Servante Intelligente EMINES. Réponds en français en te basant UNIQUEMENT sur le CONTEXTE fourni. Reproduis les informations avec précision, sans raccourcir les mots ni tronquer les phrases. Si l'information demandée est absente du contexte, dis-le clairement.`,
 };
 
-// Cache du health check Ollama (30 secondes)
-let ollamaHealthCache: { available: boolean; timestamp: number } | null = null;
+// Cache du health check Groq (30 secondes)
+let groqHealthCache: { available: boolean; timestamp: number } | null = null;
 const HEALTH_CACHE_TTL = 30_000;
 
 // ============================================
 // FONCTIONS UTILITAIRES
 // ============================================
 
-/**
- * Vérifie la santé du service Ollama
- */
-export async function checkOllamaHealth(): Promise<OllamaHealthStatus> {
-  // Return cached result if still fresh
-  if (ollamaHealthCache && Date.now() - ollamaHealthCache.timestamp < HEALTH_CACHE_TTL) {
-    return { available: ollamaHealthCache.available, models: [] };
+export async function checkGroqHealth(): Promise<GroqHealthStatus> {
+  if (groqHealthCache && Date.now() - groqHealthCache.timestamp < HEALTH_CACHE_TTL) {
+    return { available: groqHealthCache.available, models: [] };
+  }
+
+  if (!GROQ_CONFIG.apiKey) {
+    groqHealthCache = { available: false, timestamp: Date.now() };
+    return { available: false, models: [], error: 'GROQ_API_KEY manquant' };
   }
 
   try {
-    const response = await fetch(`${OLLAMA_CONFIG.baseUrl}/api/tags`, {
+    const response = await fetch(`${GROQ_CONFIG.baseUrl}/models`, {
       method: 'GET',
+      headers: { Authorization: `Bearer ${GROQ_CONFIG.apiKey}` },
       signal: AbortSignal.timeout(5000),
     });
 
-    if (!response.ok) throw new Error(`Ollama status ${response.status}`);
+    if (!response.ok) throw new Error(`Groq status ${response.status}`);
 
-    const data = (await response.json()) as { models?: Array<{ name: string }> };
-    const models = data.models?.map((m) => m.name) || [];
+    const data = (await response.json()) as { data?: Array<{ id: string }> };
+    const models = data.data?.map((m) => m.id) || [];
 
-    ollamaHealthCache = { available: true, timestamp: Date.now() };
-    console.log(`✅ Ollama disponible avec ${models.length} modèle(s):`, models);
+    groqHealthCache = { available: true, timestamp: Date.now() };
+    console.log(`✅ Groq disponible avec ${models.length} modèle(s)`);
     return { available: true, models };
   } catch (error) {
-    ollamaHealthCache = { available: false, timestamp: Date.now() };
-    console.error('❌ Ollama non disponible:', error);
+    groqHealthCache = { available: false, timestamp: Date.now() };
+    console.error('❌ Groq non disponible:', error);
     return {
       available: false,
       models: [],
@@ -120,91 +109,76 @@ export async function checkOllamaHealth(): Promise<OllamaHealthStatus> {
   }
 }
 
-/**
- * Construit le prompt enrichi avec le contexte RAG
- */
-function buildPrompt(query: string, contexts: SearchResult[]): string {
+// Keep legacy export name so controller doesn't need to change
+export { checkGroqHealth as checkOllamaHealth };
+
+function buildMessages(
+  query: string,
+  contexts: SearchResult[],
+): Array<{ role: string; content: string }> {
   const contextText = contexts
-    .map((ctx: SearchResult, idx: number) => {
+    .map((ctx, idx) => {
       const source = `[Source ${idx + 1}: ${ctx.metadata.title || ctx.metadata.filename}]`;
-      return `${source}\n${ctx.content}\n`;
+      const content = ctx.content.length > RAG_CONFIG.maxChunkLength
+        ? ctx.content.slice(0, RAG_CONFIG.maxChunkLength) + '...'
+        : ctx.content;
+      return `${source}\n${content}\n`;
     })
     .join('\n---\n\n');
 
-  return `${RAG_CONFIG.systemPrompt}
-
-CONTEXTE:
-${contextText}
-
-QUESTION DE L'UTILISATEUR:
-${query}
-
-RÉPONSE:`;
+  return [
+    { role: 'system', content: RAG_CONFIG.systemPrompt },
+    { role: 'user', content: `CONTEXTE:\n${contextText}\n\nQUESTION:\n${query}` },
+  ];
 }
 
-/**
- * Appelle Ollama pour générer une réponse
- */
-async function callOllama(prompt: string): Promise<string> {
-  console.log('🤖 Appel à Ollama pour génération...');
-  
-  const requestBody = {
-    model: OLLAMA_CONFIG.model,
-    prompt: prompt,
-    stream: false,
-    options: {
-      temperature: RAG_CONFIG.temperature,
-      num_predict: 400,
-      num_ctx: 2048,
-      top_k: 20,
-      top_p: 0.9,
-    },
-  };
+async function callGroq(messages: Array<{ role: string; content: string }>): Promise<string> {
+  console.log('🤖 Appel à Groq pour génération...');
+  console.log(`📤 Modèle: ${GROQ_CONFIG.model}`);
 
-  console.log(`📤 Modèle: ${OLLAMA_CONFIG.model}`);
-  console.log(`📤 Prompt length: ${prompt.length} caractères`);
-
-  const response = await fetch(`${OLLAMA_CONFIG.baseUrl}/api/generate`, {
+  const response = await fetch(`${GROQ_CONFIG.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_CONFIG.apiKey}`,
     },
-    body: JSON.stringify(requestBody),
-    signal: AbortSignal.timeout(OLLAMA_CONFIG.timeout),
+    body: JSON.stringify({
+      model: GROQ_CONFIG.model,
+      messages,
+      temperature: RAG_CONFIG.temperature,
+      max_tokens: 1024,
+    }),
+    signal: AbortSignal.timeout(GROQ_CONFIG.timeout),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Ollama API erreur (${response.status}): ${errorText}`);
+    throw new Error(`Groq API erreur (${response.status}): ${errorText}`);
   }
 
-  const data = (await response.json()) as OllamaResponse;
-  
-  console.log('✅ Réponse générée par Ollama');
-  console.log(`📊 Tokens générés: ${data.eval_count || 'N/A'}`);
-  
-  return data.response.trim();
+  const data = (await response.json()) as {
+    choices: Array<{ message: { content: string } }>;
+    usage?: { completion_tokens?: number };
+  };
+
+  const answer = data.choices[0]?.message?.content?.trim() ?? '';
+  console.log('✅ Réponse générée par Groq');
+  console.log(`📊 Tokens générés: ${data.usage?.completion_tokens ?? 'N/A'}`);
+  return answer;
 }
 
-/**
- * Calcule un score de pertinence (0-100)
- */
 function calculateRelevance(distance?: number): number {
   if (distance === undefined) return 80;
-  const relevance = Math.max(0, Math.min(100, (1 - distance / 2) * 100));
-  return Math.round(relevance);
+  return Math.round(Math.max(0, Math.min(100, (1 - distance / 2) * 100)));
 }
 
 // ============================================
 // FONCTION PRINCIPALE RAG
 // ============================================
 
-/**
- * Génère une réponse à partir d'une question en utilisant RAG
- */
 export async function generateAnswer(
   query: string,
-  topK: number = RAG_CONFIG.topK
+  topK: number = RAG_CONFIG.topK,
 ): Promise<GenerateAnswerResult> {
   const startTime = Date.now();
 
@@ -213,121 +187,83 @@ export async function generateAnswer(
     console.log(`🔍 GÉNÉRATION DE RÉPONSE RAG`);
     console.log(`${'='.repeat(60)}`);
     console.log(`📝 Question: "${query}"`);
-    console.log(`🔢 Top-K: ${topK}`);
 
-    // 1. Recherche sémantique dans ChromaDB
-    console.log(`\n📚 Recherche de chunks pertinents...`);
     const searchResults = await chromaService.searchDocuments(query, topK);
 
     if (!searchResults || searchResults.length === 0) {
       console.log('⚠️ Aucun chunk pertinent trouvé');
       return {
         success: true,
-        answer: 'Je n\'ai trouvé aucune information pertinente dans ma base de connaissances pour répondre à votre question. Pourriez-vous reformuler ou préciser votre demande ?',
+        answer: "Je n'ai trouvé aucune information pertinente dans ma base de connaissances pour répondre à votre question. Pourriez-vous reformuler ou préciser votre demande ?",
         sources: [],
-        metadata: {
-          query,
-          chunksUsed: 0,
-          model: OLLAMA_CONFIG.model,
-          processingTime: Date.now() - startTime,
-        },
+        metadata: { query, chunksUsed: 0, model: GROQ_CONFIG.model, processingTime: Date.now() - startTime },
       };
     }
 
-    console.log(`✅ ${searchResults.length} chunk(s) trouvé(s)`);
-    
-    // Convertir les résultats de votre chromaService vers SearchResult
-    const typedResults: SearchResult[] = searchResults.map((result: any) => ({
-      id: result.id,
-      content: result.content,
-      metadata: result.metadata,
-      distance: result.distance,
+    const typedResults: SearchResult[] = searchResults.map((r: any) => ({
+      id: r.id,
+      content: r.content,
+      metadata: r.metadata,
+      distance: r.distance,
     }));
 
-    typedResults.forEach((result: SearchResult, idx: number) => {
-      const relevance = calculateRelevance(result.distance);
-      console.log(`   ${idx + 1}. ${result.metadata.title} (pertinence: ${relevance}%)`);
+    typedResults.forEach((r, idx) => {
+      console.log(`   ${idx + 1}. ${r.metadata.title} (pertinence: ${calculateRelevance(r.distance)}%)`);
     });
 
-    // 2. Construire le prompt avec contexte
-    const prompt = buildPrompt(query, typedResults);
+    const messages = buildMessages(query, typedResults);
+    const answer = await callGroq(messages);
 
-    // 3. Générer la réponse avec Ollama
-    const answer = await callOllama(prompt);
-
-    // 5. Préparer les sources
-    const sources = typedResults.map((result: SearchResult) => ({
-      title: result.metadata.title || 'Sans titre',
-      filename: result.metadata.filename || 'Inconnu',
-      category: result.metadata.category || 'general',
-      chunkIndex: result.metadata.chunkIndex,
-      relevance: calculateRelevance(result.distance),
+    const sources = typedResults.map((r) => ({
+      title: r.metadata.title || 'Sans titre',
+      filename: r.metadata.filename || 'Inconnu',
+      category: r.metadata.category || 'general',
+      chunkIndex: r.metadata.chunkIndex,
+      relevance: calculateRelevance(r.distance),
     }));
 
     const processingTime = Date.now() - startTime;
-
-    console.log(`\n✅ Réponse générée avec succès`);
-    console.log(`⏱️  Temps de traitement: ${processingTime}ms`);
-    console.log(`📊 Longueur réponse: ${answer.length} caractères`);
+    console.log(`✅ Réponse générée (${processingTime}ms, ${answer.length} chars)`);
     console.log(`${'='.repeat(60)}\n`);
 
     return {
       success: true,
       answer,
       sources,
-      metadata: {
-        query,
-        chunksUsed: typedResults.length,
-        model: OLLAMA_CONFIG.model,
-        processingTime,
-      },
+      metadata: { query, chunksUsed: typedResults.length, model: GROQ_CONFIG.model, processingTime },
     };
   } catch (error) {
     console.error('❌ Erreur lors de la génération:', error);
-    
     return {
       success: false,
       answer: 'Désolé, une erreur est survenue lors de la génération de la réponse. Veuillez réessayer.',
       sources: [],
-      metadata: {
-        query,
-        chunksUsed: 0,
-        model: OLLAMA_CONFIG.model,
-        processingTime: Date.now() - startTime,
-      },
+      metadata: { query, chunksUsed: 0, model: GROQ_CONFIG.model, processingTime: Date.now() - startTime },
       error: error instanceof Error ? error.message : 'Erreur inconnue',
     };
   }
 }
 
-/**
- * Génère une réponse en streaming réel (SSE)
- * Appelle Ollama avec stream:true et transmet chaque token via onChunk
- */
 export async function generateAnswerStream(
   query: string,
   topK: number = RAG_CONFIG.topK,
   onChunk: (token: string) => void,
   onDone: (result: GenerateAnswerResult) => void,
-  onError: (err: string) => void
+  onError: (err: string) => void,
 ): Promise<void> {
   const startTime = Date.now();
 
   try {
-    // 1. Recherche ChromaDB
     const searchResults = await chromaService.searchDocuments(query, topK);
 
-    const noResults = !searchResults || searchResults.length === 0;
-    const fallbackAnswer =
-      'Je n\'ai trouvé aucune information pertinente dans ma base de connaissances.';
-
-    if (noResults) {
-      onChunk(fallbackAnswer);
+    if (!searchResults || searchResults.length === 0) {
+      const fallback = "Je n'ai trouvé aucune information pertinente dans ma base de connaissances.";
+      onChunk(fallback);
       onDone({
         success: true,
-        answer: fallbackAnswer,
+        answer: fallback,
         sources: [],
-        metadata: { query, chunksUsed: 0, model: OLLAMA_CONFIG.model, processingTime: Date.now() - startTime },
+        metadata: { query, chunksUsed: 0, model: GROQ_CONFIG.model, processingTime: Date.now() - startTime },
       });
       return;
     }
@@ -339,73 +275,52 @@ export async function generateAnswerStream(
       distance: r.distance,
     }));
 
-    // 2. Build prompt
-    const prompt = buildPrompt(query, typedResults);
+    const messages = buildMessages(query, typedResults);
 
-    // 3. Stream from Ollama
-    const response = await fetch(`${OLLAMA_CONFIG.baseUrl}/api/generate`, {
+    const response = await fetch(`${GROQ_CONFIG.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${GROQ_CONFIG.apiKey}`,
+      },
       body: JSON.stringify({
-        model: OLLAMA_CONFIG.model,
-        prompt,
+        model: GROQ_CONFIG.model,
+        messages,
+        temperature: RAG_CONFIG.temperature,
+        max_tokens: 1024,
         stream: true,
-        options: {
-          temperature: RAG_CONFIG.temperature,
-          num_predict: 400,
-          num_ctx: 2048,
-          top_k: 20,
-          top_p: 0.9,
-        },
       }),
-      signal: AbortSignal.timeout(OLLAMA_CONFIG.timeout),
+      signal: AbortSignal.timeout(GROQ_CONFIG.timeout),
     });
 
     if (!response.ok || !response.body) {
-      throw new Error(`Ollama stream error: ${response.status}`);
+      const errBody = await response.text().catch(() => '');
+      throw new Error(`Groq stream error: ${response.status} — ${errBody}`);
     }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let fullAnswer = '';
-    let doneCalled = false;
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
       const text = decoder.decode(value, { stream: true });
-      // Ollama streams NDJSON — each line is a JSON object
+      // Groq streams SSE: "data: {...}\n\n" lines
       for (const line of text.split('\n')) {
         const trimmed = line.trim();
-        if (!trimmed) continue;
+        if (!trimmed || !trimmed.startsWith('data:')) continue;
+        const jsonStr = trimmed.slice(5).trim();
+        if (jsonStr === '[DONE]') break;
         try {
-          const data = JSON.parse(trimmed);
-          if (data.response) {
-            onChunk(data.response);
-            fullAnswer += data.response;
-          }
-          if (data.done) {
-            doneCalled = true;
-            const sources = typedResults.map((r: SearchResult) => ({
-              title: r.metadata.title || 'Sans titre',
-              filename: r.metadata.filename || 'Inconnu',
-              category: r.metadata.category || 'general',
-              chunkIndex: r.metadata.chunkIndex,
-              relevance: calculateRelevance(r.distance),
-            }));
-            onDone({
-              success: true,
-              answer: fullAnswer,
-              sources,
-              metadata: {
-                query,
-                chunksUsed: typedResults.length,
-                model: OLLAMA_CONFIG.model,
-                processingTime: Date.now() - startTime,
-              },
-            });
-            return;
+          const data = JSON.parse(jsonStr) as {
+            choices: Array<{ delta: { content?: string }; finish_reason?: string }>;
+          };
+          const token = data.choices[0]?.delta?.content;
+          if (token) {
+            onChunk(token);
+            fullAnswer += token;
           }
         } catch {
           // skip malformed line
@@ -413,29 +328,26 @@ export async function generateAnswerStream(
       }
     }
 
-    // Le stream s'est fermé sans que Ollama envoie done:true — appel de secours
-    if (!doneCalled) {
-      const sources = typedResults.map((r: SearchResult) => ({
-        title: r.metadata.title || 'Sans titre',
-        filename: r.metadata.filename || 'Inconnu',
-        category: r.metadata.category || 'general',
-        chunkIndex: r.metadata.chunkIndex,
-        relevance: calculateRelevance(r.distance),
-      }));
-      onDone({
-        success: true,
-        answer: fullAnswer || 'Réponse incomplète reçue.',
-        sources,
-        metadata: {
-          query,
-          chunksUsed: typedResults.length,
-          model: OLLAMA_CONFIG.model,
-          processingTime: Date.now() - startTime,
-        },
-      });
-    }
+    const sources = typedResults.map((r) => ({
+      title: r.metadata.title || 'Sans titre',
+      filename: r.metadata.filename || 'Inconnu',
+      category: r.metadata.category || 'general',
+      chunkIndex: r.metadata.chunkIndex,
+      relevance: calculateRelevance(r.distance),
+    }));
+
+    onDone({
+      success: true,
+      answer: fullAnswer || 'Réponse incomplète reçue.',
+      sources,
+      metadata: {
+        query,
+        chunksUsed: typedResults.length,
+        model: GROQ_CONFIG.model,
+        processingTime: Date.now() - startTime,
+      },
+    });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : 'Erreur inconnue';
-    onError(msg);
+    onError(error instanceof Error ? error.message : 'Erreur inconnue');
   }
 }

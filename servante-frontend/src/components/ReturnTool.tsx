@@ -28,10 +28,11 @@ interface Borrow {
 interface ReturnToolProps {
   onBack: () => void;
   currentUser: any;
-  onReturnSuccess?: (drawerId: string) => void; // Callback to trigger DrawerClosingGuard in parent
+  onReturnSuccess?: (drawerId: string) => void;
+  onBorrowStolenTools?: (toolNames: string[]) => Promise<void>;
 }
 
-const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser, onReturnSuccess }) => {
+const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser, onReturnSuccess, onBorrowStolenTools }) => {
   const { t } = useTranslation();
   const [activeBorrows, setActiveBorrows] = useState<Borrow[]>([]);
   const [selectedBorrow, setSelectedBorrow] = useState<Borrow | null>(null);
@@ -301,6 +302,7 @@ const ReturnTool: React.FC<ReturnToolProps> = ({ onBack, currentUser, onReturnSu
         onValidationSuccess={handleValidationSuccess}
         onValidationFailure={handleValidationFailure}
         onRetry={handleRetry}
+        onBorrowStolenTools={onBorrowStolenTools}
       />
     );
   }

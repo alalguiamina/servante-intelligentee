@@ -14,6 +14,7 @@ interface RealtimeDetectionProps {
   onRetry: () => void;
   onBorrowAlternative?: (wrongToolName: string) => void;
   onExtraToolsDetected?: (extraToolNames: string[]) => void;
+  onBorrowStolenTools?: (toolNames: string[]) => Promise<void>;
 }
 
 interface Detection {
@@ -81,9 +82,10 @@ const normalize = (s: string) =>
   s.toLowerCase().trim().replace(/-/g, ' ').normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 
-const DURATION       = 35; // initial borrow/return
-const RETRY_DURATION = 20; // after wrong tool taken and retrying
+const DURATION            = 35;
+const RETRY_DURATION      = 20;
 const ACTION_PHASE_SECONDS = 10;
+const VOTE_WINDOW_SECONDS  = 3;  // reset vote counters when this many seconds remain → only the final burst counts
 const DRAWER_OPEN_TRAVEL_SECONDS = Number(import.meta.env.VITE_DRAWER_OPEN_TRAVEL_SECONDS ?? 4);
 const HAND_CONFIRM_FRAMES = 2;
 const CLEAR_CONFIRM_FRAMES = 4;
@@ -116,7 +118,8 @@ function phase1Conformity(
 
 // ── Helper: phase 2 action result (diff snap1→snap2) ─────────────────────────
 type DetectionStatus =
-  | { code: 'C1' | 'C2'; ok: true; message: string }
+  | { code: 'C1'; ok: true; message: string }
+  | { code: 'C2'; ok: true; message: string; stolenDuringReturn: string[] }
   | { code: 'E1'; ok: false; message: string; canRetry: boolean; wrongToolName: string }
   | { code: 'E2' | 'E4' | 'E6'; ok: false; message: string; canRetry: boolean }
   | { code: 'E3'; ok: false; message: string; canRetry: boolean; extraToolNames: string[] };
@@ -126,6 +129,7 @@ function phase2Status(
   snap2Names: string[],
   toolName: string,
   action: 'borrow' | 'return',
+  drawerTools: DrawerTool[] = [],
 ): DetectionStatus {
   if (action === 'borrow') {
     const taken      = snap1Names.filter(s => !snap2Names.some(s2 => normalize(s2) === normalize(s)));
@@ -144,11 +148,17 @@ function phase2Status(
     const targetReturned = returned.some(s => normalize(s) === normalize(toolName));
     const wrongReturned  = returned.filter(s => normalize(s) !== normalize(toolName));
 
+    const stolenDuringReturn = snap1Names.filter(s => {
+      if (snap2Names.some(s2 => normalize(s2) === normalize(s))) return false;
+      if (normalize(s) === normalize(toolName)) return false;
+      const dbTool = drawerTools.find(t => normalize(t.name) === normalize(s));
+      return !!dbTool && dbTool.availableQuantity === 0;
+    });
     if (wrongReturned.length > 0 && !targetReturned)
       return { code: 'E4', ok: false, message: `Mauvais outil retourné : "${wrongReturned[0]}" au lieu de "${toolName}".`, canRetry: true };
     if (!targetReturned)
       return { code: 'E6', ok: false, message: `"${toolName}" n'a pas été replacé dans le tiroir.`, canRetry: true };
-    return { code: 'C2', ok: true, message: `"${toolName}" a bien été retourné. Retour confirmé.` };
+    return { code: 'C2', ok: true, message: `"${toolName}" a bien été retourné. Retour confirmé.`, stolenDuringReturn };
   }
 }
 
@@ -159,7 +169,7 @@ const CAPTURE_W = 640;
 const CAPTURE_H = 360;
 
 const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
-  toolName, drawerId, action = 'borrow', isRetry = false, initialSnapshot, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative, onExtraToolsDetected,
+  toolName, drawerId, action = 'borrow', isRetry = false, initialSnapshot, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative, onExtraToolsDetected, onBorrowStolenTools,
 }) => {
   // Shorter timer only for borrow retries (quick re-pick); returns always need full time
   const drawerTravelSeconds = Math.max(1, DRAWER_OPEN_TRAVEL_SECONDS);
@@ -346,6 +356,14 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
       }
     }
   }, [timeRemaining, drawerTools, toolName, action, phase, actionStartAt]);
+
+  // When the last VOTE_WINDOW_SECONDS begin, discard earlier votes — only the final burst counts.
+  useEffect(() => {
+    if (snapshot1SavedRef.current && timeRemaining === VOTE_WINDOW_SECONDS) {
+      toolVoteMapRef.current = {};
+      phase2FrameCountRef.current = 0;
+    }
+  }, [timeRemaining]);
 
   // ── Timer end: capture snap2 explicitly, then show comparison ───────────────
   const onTimerEnd = useCallback(() => {
@@ -747,6 +765,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         onBorrowAlternative={onBorrowAlternative}
         onReturnAndCancel={handleReturnAndCancel}
         onExtraToolsDetected={onExtraToolsDetected}
+        onBorrowStolenTools={onBorrowStolenTools}
       />
     );
   }
@@ -1100,6 +1119,7 @@ interface ComparisonProps {
   onBorrowAlternative?: (wrongToolName: string) => void;
   onReturnAndCancel?: (wrongToolName: string) => void;
   onExtraToolsDetected?: (extraToolNames: string[]) => void;
+  onBorrowStolenTools?: (toolNames: string[]) => Promise<void>;
 }
 
 const statusConfig: Record<string, { bg: string; border: string; icon: React.ReactNode; label: string }> = {
@@ -1115,13 +1135,13 @@ const statusConfig: Record<string, { bg: string; border: string; icon: React.Rea
 const ComparisonScreen: React.FC<ComparisonProps> = ({
   drawerId, toolName, action, drawerTools, loadingDrawer,
   snapshot1, snapshot2, annotatedImage, videoRef, captureRef, cameraReady, detections,
-  onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel, onExtraToolsDetected,
+  onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel, onExtraToolsDetected, onBorrowStolenTools,
 }) => {
   const snap1Names = toDisplayNames(snapshot1);
   const snap2Names = toDisplayNames(snapshot2);
 
   const p1 = phase1Conformity(snap1Names, drawerTools, toolName, action);
-  const p2 = phase2Status(snap1Names, snap2Names, toolName, action);
+  const p2 = phase2Status(snap1Names, snap2Names, toolName, action, drawerTools);
   const cfg = statusConfig[p2.code];
   const warningSentRef = React.useRef(false);
 
@@ -1131,6 +1151,33 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
       onExtraToolsDetected?.(p2.extraToolNames);
     }
   }, [action, onExtraToolsDetected, p2]);
+
+  // ── Stolen-during-return resolution ───────────────────────────────────────
+  const [resolvedStolen, setResolvedStolen] = React.useState<string[]>([]);
+  const [awaitingReturn, setAwaitingReturn] = React.useState<string | null>(null);
+  const [borrowingTool,  setBorrowingTool]  = React.useState<string | null>(null);
+  const stolenConfirmRef = React.useRef(0);
+
+  // Watch live camera frames to detect when the returned stolen tool reappears
+  React.useEffect(() => {
+    if (!awaitingReturn) { stolenConfirmRef.current = 0; return; }
+    const toolBack = detections.some(d =>
+      normalize(getDisplayName(d.class)) === normalize(awaitingReturn)
+    );
+    if (toolBack) {
+      stolenConfirmRef.current++;
+      if (stolenConfirmRef.current >= 3) {
+        setResolvedStolen(prev => [...prev, awaitingReturn]);
+        setAwaitingReturn(null);
+      }
+    } else {
+      stolenConfirmRef.current = 0;
+    }
+  }, [detections, awaitingReturn]);
+
+  const stolenTools      = p2.code === 'C2' ? p2.stolenDuringReturn : [];
+  const unresolvedStolen = stolenTools.filter(t => !resolvedStolen.includes(t));
+  const canValidate      = p2.ok && unresolvedStolen.length === 0 && !awaitingReturn;
 
   const validateLabel = action === 'return' ? 'Valider le retour' : "Valider l'emprunt";
 
@@ -1323,6 +1370,74 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
                 </div>
               </div>
 
+              {/* ── Outils volés pendant le retour ── */}
+              {stolenTools.length > 0 && (
+                <div className="mb-5 rounded-xl border-2 border-orange-400 bg-orange-50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-orange-600 mb-3">
+                    Outil(s) retiré(s) pendant le retour — action requise
+                  </p>
+                  <div className="space-y-3">
+                    {stolenTools.map(name => {
+                      const isResolved  = resolvedStolen.includes(name);
+                      const isAwaiting  = awaitingReturn === name;
+                      const isBorrowing = borrowingTool  === name;
+                      return (
+                        <div key={name}>
+                          {isResolved ? (
+                            <div className="flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-300 rounded-lg text-sm font-semibold text-green-800">
+                              <CheckCircle className="w-4 h-4 text-green-600 shrink-0" />
+                              <span>"{name}" — Résolu ✓</span>
+                            </div>
+                          ) : isAwaiting ? (
+                            <div className="px-3 py-3 bg-blue-50 border border-blue-300 rounded-lg">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Loader className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
+                                <span className="text-sm font-semibold text-blue-800">En attente de retour de "{name}"...</span>
+                              </div>
+                              <p className="text-xs text-blue-600 ml-6">Replacez l'outil dans le tiroir devant la caméra</p>
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="flex items-center gap-2 text-sm font-semibold text-orange-800 mb-2">
+                                <AlertTriangle className="w-4 h-4 text-orange-500 shrink-0" />
+                                "{name}" a été retiré du tiroir
+                              </p>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={async () => {
+                                    setBorrowingTool(name);
+                                    try { await onBorrowStolenTools?.([name]); } finally { setBorrowingTool(null); }
+                                    setResolvedStolen(prev => [...prev, name]);
+                                  }}
+                                  disabled={!!borrowingTool || !!awaitingReturn}
+                                  className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                  {isBorrowing ? <Loader className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                                  Emprunter
+                                </button>
+                                <button
+                                  onClick={() => { stolenConfirmRef.current = 0; setAwaitingReturn(name); }}
+                                  disabled={!!borrowingTool || !!awaitingReturn}
+                                  className="flex-1 py-2 px-3 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                  <RefreshCw className="w-4 h-4" />
+                                  Remettre dans le tiroir
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {unresolvedStolen.length > 0 && !awaitingReturn && (
+                    <p className="text-xs text-orange-600 mt-3 text-center font-medium">
+                      Résolvez tous les outils retirés pour débloquer la validation.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Buttons */}
               {p2.code === 'E1' ? (
                 /* ── E1: mauvais outil pris → deux options ── */
@@ -1365,9 +1480,9 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
                       <RefreshCw className="w-5 h-5" /> Réessayer
                     </button>
                   )}
-                  <button onClick={onConfirm} disabled={!p2.ok}
+                  <button onClick={onConfirm} disabled={!canValidate}
                     className={`flex-1 py-4 rounded-xl font-bold transition-colors flex items-center justify-center gap-2 shadow-lg
-                      ${p2.ok ? 'bg-[#0f2b56] hover:bg-[#0a1f3d] text-white cursor-pointer' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
+                      ${canValidate ? 'bg-[#0f2b56] hover:bg-[#0a1f3d] text-white cursor-pointer' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>
                     <Check className="w-5 h-5" /> {validateLabel}
                   </button>
                 </div>

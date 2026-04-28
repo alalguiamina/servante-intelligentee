@@ -1,7 +1,7 @@
 ﻿import { Request, Response } from "express";
 import { chromaService } from "../services/chatbot/chromaService";
 import fs from "fs/promises";
-import { generateAnswer, generateAnswerStream, checkOllamaHealth } from '../services/chatbot/ragService';
+import { generateAnswer, generateAnswerStream, checkGroqHealth } from '../services/chatbot/ragService';
 
 class ChatbotController {
   // ============================================
@@ -276,7 +276,7 @@ class ChatbotController {
   async healthCheck(_req: Request, res: Response): Promise<void> {
     try {
       const chromaStatus = chromaService.getStatus();
-      const ollamaHealth = await checkOllamaHealth();
+      const groqHealth = await checkGroqHealth();
 
       res.json({
         success: true,
@@ -285,13 +285,13 @@ class ChatbotController {
           collection: chromaStatus.collectionName,
           mode: "server",
         },
-        ollama: {
-          status: ollamaHealth.available ? "connected" : "disconnected",
-          models: ollamaHealth.models || [],
-          ...(ollamaHealth.error && { error: ollamaHealth.error }),
+        groq: {
+          status: groqHealth.available ? "connected" : "disconnected",
+          models: groqHealth.models || [],
+          ...(groqHealth.error && { error: groqHealth.error }),
         },
         rag: {
-          status: chromaStatus.initialized && ollamaHealth.available ? "ready" : "not_ready",
+          status: chromaStatus.initialized && groqHealth.available ? "ready" : "not_ready",
         },
       });
     } catch (error) {
@@ -305,16 +305,16 @@ class ChatbotController {
 
   async checkOllama(_req: Request, res: Response): Promise<void> {
     try {
-      const health = await checkOllamaHealth();
+      const health = await checkGroqHealth();
 
       res.json({
         success: true,
-        ollama: health,
+        groq: health,
       });
     } catch (error) {
       res.status(500).json({
         success: false,
-        error: "Erreur lors du check de santé Ollama",
+        error: "Erreur lors du check de santé Groq",
         details: error instanceof Error ? error.message : "Erreur inconnue",
       });
     }

@@ -94,7 +94,7 @@
 
 #### Méthode 1 : Auto-inscription (si activée)
 **Étapes pour l'utilisateur :**
-1. Accéder à la page d'inscription : `https://emprunt-labo.exemple.fr/inscription`
+1. Accéder à la page d'inscription : `le site web du FabLab EMINES`
 2. Remplir le formulaire :
    - Prénom et Nom
    - Adresse email institutionnelle (@université.fr)
@@ -561,8 +561,8 @@ marie.martin@univ.fr,Marie,Martin,power_user,Electronique,987654321,0698765432
 - Base de connaissances
 
 **Support de deuxième niveau :**
-- Email : support-labo@exemple.fr
-- Téléphone : +33 X XX XX XX XX (heures ouvrées)
+- Email : Fablab.EMINES@emines.um6p.ma
+- Téléphone : Fablab.EMINES@emines.um6p.ma (heures ouvrées)
 - Ticket de support en ligne
 
 **Support de troisième niveau :**

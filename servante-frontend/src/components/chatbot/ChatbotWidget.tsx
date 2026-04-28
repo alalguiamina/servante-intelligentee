@@ -412,7 +412,7 @@ const ChatbotWidget: React.FC = () => {
                 <div className="flex items-start gap-2.5 px-4 py-2.5 bg-amber-50 border-b border-amber-100 flex-shrink-0">
                   <WifiOff className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-amber-800 leading-snug">
-                    Service indisponible. Assurez-vous que ChromaDB et Ollama sont démarrés.
+                    Service indisponible. Assurez-vous que le serveur et ChromaDB sont démarrés.
                   </p>
                 </div>
               )}

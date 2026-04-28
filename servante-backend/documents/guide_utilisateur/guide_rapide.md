@@ -1,82 +1,102 @@
-# Guide Rapide - Système d'Emprunt d'Outils
+# Guide Rapide — Servante Intelligente EMINES
 
-## Comment allumer la servante
+## Qu'est-ce que la Servante Intelligente ?
 
-1. **Allumez la servante**
-   - les tirroirs se mettent à s'ouvrir autommatiquement lorsque le pret est validé , vous pourriez en suite prendre l'outil que vous avez demandé.
-   - Les tirroirs restent bloqués tant que le pret n'est pas encore validé.
+La Servante Intelligente est une armoire à outils automatisée du FabLab EMINES. Elle permet d'emprunter et retourner des outils sans intervention humaine. Un système de caméra IA vérifie automatiquement chaque emprunt et chaque retour.
 
-2. **Activation du système**
-   -Vous pouvez vous identifier de deux manières :
+---
 
-      En scannant votre badge RFID sur le lecteur.
+## Emprunter un outil — 3 étapes
 
-      En saisissant vos identifiants (nom d'utilisateur/mot de passe du Fablab) directement sur l'écran tactile.
-   - Une fois connecté, vous aurez un aperçu des outils disponibles dans le laboratoire mécanique et du statut de vos emprunts en cours.
+### Étape 1 : Choisissez votre outil sur le site web
+- Connectez-vous avec votre email et mot de passe.
+- Allez dans "Catalogue des outils".
+- Les outils disponibles sont marqués en vert.
+- Cliquez sur "Emprunter" et confirmez.
 
-## 📦 Comment emprunter un outil en 3 étapes
+### Étape 2 : Récupérez votre outil à la servante
+- Rendez-vous devant la servante.
+- Le tiroir de votre outil s'ouvre automatiquement après validation.
+- La caméra IA confirme que vous prenez le bon outil.
+- Retirez l'outil. Le tiroir se referme seul après 15 secondes.
 
-### Étape 1 : Identification
-- Scannez votre badge étudiant/personnel sur le lecteur RFID
-- Vérifiez que votre nom apparaît à l'écran
-- Si erreur : vérifiez que votre badge est bien enregistré dans le système
+### Étape 3 : Confirmation
+- Vous recevez un email de confirmation avec la date de retour.
 
-### Étape 2 : Sélection de l'outil
-- Consultez la liste des outils disponibles sur l'écran tactile
-- Sélectionnez l'outil souhaité en touchant son nom
-- Vérifiez les informations (durée d'emprunt, état)
-- Confirmez votre sélection
+**Ou directement sur la servante :**
+- Scannez votre badge RFID, ou entrez vos identifiants sur l'écran tactile.
+- Sélectionnez l'outil dans la liste.
+- Le tiroir s'ouvre automatiquement.
 
-### Étape 3 : Récupération
-- La servante ouvrira automatiquement le compartiment contenant l'outil
+---
 
-- Retirez l'outil du compartiment
-- Le compartiment se refermera automatiquement après 15 secondes
-- Vous recevrez un email de confirmation
+## Retourner un outil — 4 étapes
 
-## 🔄 Retourner un outil
+1. Scannez votre badge RFID sur la servante, ou connectez-vous sur l'écran tactile.
+2. Sélectionnez "Retour d'outil" puis choisissez l'outil dans votre liste d'emprunts.
+3. Le tiroir indiqué s'ouvre — placez soigneusement l'outil dedans.
+4. La caméra IA vérifie le retour. Attendez la confirmation verte à l'écran.
 
-1. Scannez votre badge
-2. Sélectionnez "Retour d'outil" sur l'écran
-3. Placez l'outil dans le compartiment indiqué
-4. Attendez la confirmation de retour
+Vous recevez un email de confirmation de retour.
 
-## ⚠️ Que faire en cas de problème simple
+---
 
-### Le badge ne fonctionne pas
-- **Solution 1** : Nettoyez votre badge avec un chiffon sec
-- **Solution 2** : Essayez de le scanner plus lentement
-- **Solution 3** : Contactez l'administrateur pour vérifier votre enregistrement, envoyez un email à notre équipe : Fablab.EMINES@emines.um6p.ma
-- **Solution 4** : Identifiez vous en utilisant le mot de passe 
+## Problèmes courants et solutions
+
+### Mon badge ne fonctionne pas
+- Nettoyez le badge avec un chiffon sec.
+- Placez-le bien à plat sur le lecteur et maintenez-le immobile 2-3 secondes.
+- Alternative : connectez-vous avec votre email et mot de passe directement sur l'écran tactile.
+- Contact : **Fablab.EMINES@emines.um6p.ma**
 
 ### La servante ne répond pas
+- Attendez 10 secondes et réessayez.
+- Si l'écran est noir, appuyez sur le bouton d'alimentation (côté droit).
 
-- **Solution 2** : Attendez 10 secondes et réessayez
-- **Solution 3** : Redémarrez la servante (bouton d'alimentation)
+### Le tiroir ne s'ouvre pas
+- Ne forcez jamais un tiroir.
+- Reessayez l'emprunt depuis le début.
+- Appuyez sur "Assistance" à l'écran si le problème persiste.
 
-### Le compartiment ne s'ouvre pas
-- **Solution 1** : Vérifiez qu'aucun message d'erreur n'apparaît à l'écran
-- **Solution 2** : Réessayez l'emprunt depuis le début
-- **Solution 3** : Pour toute question ou problème non résolu, envoyez un email à notre équipe : Fablab.EMINES@emines.um6p.ma
+### L'outil que je veux est emprunté
+- Consultez la date de retour prévue sur le site web.
+- Choisissez un outil similaire disponible.
+- Le chatbot peut vous suggérer des alternatives.
 
-### L'outil n'est pas disponible
-- **Solution 1** : Consultez la date de retour prévue
-- **Solution 2** : Choisissez un outil similaire disponible
+### Limite d'emprunts atteinte
+- Vous avez atteint 5 outils simultanés (limite standard).
+- Retournez un outil pour en emprunter un nouveau.
+- Contact pour demande d'extension : **Fablab.EMINES@emines.um6p.ma**
 
+---
 
-### Message d'erreur "Limite d'emprunts atteinte"
-- Vous avez atteint le nombre maximum d'emprunts simultanés (voir FAQ)
-- Retournez un outil avant d'en emprunter un nouveau
-- Contactez l'administrateur si vous avez besoin d'une extension , envoyez un email à notre équipe : Fablab.EMINES@emines.um6p.ma
+## Règles importantes
 
-## 📞 Contacts d'urgence
+- **Durée maximale :** 21 jours (emprunt initial + 2 prolongations maximum).
+- **Retard 1-2 jours :** avertissement par email.
+- **Retard 3-7 jours :** suspension temporaire de 3 jours après retour.
+- **Retard 8+ jours :** suspension de 7 jours + rendez-vous obligatoire.
+- **Signaler un outil défectueux** dès que possible via le site web.
+- **Ne jamais prêter votre badge** à quelqu'un d'autre.
 
+---
 
-- **Administrateur** : envoyez un email à notre équipe : Fablab.EMINES@emines.um6p.ma
+## Durées d'emprunt
 
+La durée d'emprunt de chaque outil est affichée sur le site web au moment de l'emprunt. Prolongation possible jusqu'à 2 fois, durée totale maximale 21 jours.
 
-## 💡 Astuces
+---
 
-- Retournez les outils dans les délais pour éviter les pénalités
-- Signalez immédiatement tout problème ou dommage sur un outil
-- Gardez votre badge en bon état pour un meilleur fonctionnement
+## Astuces
+
+- Vérifiez la disponibilité en ligne avant de vous déplacer.
+- Retournez l'outil propre et complet (toutes les pièces présentes).
+- Signalez tout problème ou dommage immédiatement — pas de sanction pour les signalements honnêtes.
+- Prolongez votre emprunt depuis le site web AVANT la date de retour.
+
+---
+
+## Contact
+
+**Email :** Fablab.EMINES@emines.um6p.ma
+**Horaires :** Lundi - Vendredi, 8h00 - 18h00

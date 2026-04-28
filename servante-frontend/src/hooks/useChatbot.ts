@@ -112,7 +112,7 @@ export function useChatbot() {
                 m.id === assistantId
                   ? {
                       ...m,
-                      content: `Erreur : ${err}. Vérifiez que le serveur, ChromaDB et Ollama sont démarrés.`,
+                      content: `Erreur : ${err}. Vérifiez que le serveur et ChromaDB sont démarrés.`,
                       isError: true,
                       isStreaming: false,
                     }

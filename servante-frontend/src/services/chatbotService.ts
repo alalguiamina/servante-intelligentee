@@ -48,7 +48,7 @@ export interface ChatResponse {
 export interface HealthStatus {
   success: boolean;
   chromadb: { status: string; collection: string; mode?: string };
-  ollama: { status: string; models: string[]; error?: string };
+  groq: { status: string; models: string[]; error?: string };
   rag: { status: string };
 }
 

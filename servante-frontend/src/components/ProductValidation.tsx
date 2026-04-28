@@ -13,6 +13,7 @@ interface ProductValidationProps {
   onRetry?: () => void;
   onBorrowAlternative?: (wrongToolName: string) => void;
   onExtraToolsDetected?: (extraToolNames: string[]) => void;
+  onBorrowStolenTools?: (toolNames: string[]) => Promise<void>;
   onSkip?: () => void;
 }
 
@@ -28,6 +29,7 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
   onRetry,
   onBorrowAlternative,
   onExtraToolsDetected,
+  onBorrowStolenTools,
 }) => {
   return (
     <RealtimeDetection
@@ -42,6 +44,7 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
       onRetry={onRetry ?? (() => onValidationFailure("Détection annulée — réessayez depuis la sélection d'outil."))}
       onBorrowAlternative={onBorrowAlternative}
       onExtraToolsDetected={onExtraToolsDetected}
+      onBorrowStolenTools={onBorrowStolenTools}
     />
   );
 };

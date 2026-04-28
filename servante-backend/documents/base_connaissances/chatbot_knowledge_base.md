@@ -26,9 +26,9 @@
 #### Disponibilité des Outils
 **Questions supportées :**
 - "Le multimètre est-il disponible ?"
-- "Quand puis-je emprunter la pince ampèremétrique ?"
-- "Y a-t-il des tournevis disponibles ?"
-- "Quels outils de mesure électrique sont disponibles maintenant ?"
+- "Puis-je emprunter le pied à coulisse ?"
+- "Y a-t-il une perceuse disponible ?"
+- "Quels outils de coupe sont disponibles maintenant ?"
 
 **Réponse fournie :**
 - Statut actuel (Disponible / Emprunté / Maintenance)
@@ -40,10 +40,11 @@
 
 #### Informations sur les Outils
 **Questions supportées :**
-- "À quoi sert un inclinomètre numérique ?"
-- "Comment utiliser le multimètre ?"
-- "Quelle est la durée d'emprunt pour la pince ampèremétrique ?"
-- "Où trouver le manuel du rapporteur d'angle numérique ?"
+- "À quoi sert un pied à coulisse ?"
+- "Comment utiliser le dénudeur automatique ?"
+- "Quelle est la durée d'emprunt pour la perceuse ?"
+- "Quelle est la différence entre la mini pince coupante et la pince coupante ?"
+- "Quel tournevis choisir pour une vis cruciforme ?"
 
 **Réponse fournie :**
 - Description de l'outil
@@ -93,7 +94,7 @@
 - Badge ne fonctionne pas
 - Servante affiche une erreur
 - Impossible de se connecter
-- Outil défectueux
+- Outil défectueux (ex : perceuse ne démarre pas, multimètre sans affichage)
 - Compartiment bloqué
 - Prolongation refusée
 
@@ -125,7 +126,6 @@
 **Exemples :**
 - "Combien d'outils puis-je emprunter ?"
 - "Quelle est la durée maximale d'emprunt ?"
-- "Puis-je emprunter 3 multimètres ?"
 - "Combien de fois puis-je prolonger ?"
 
 **Réponse basée sur :**
@@ -140,7 +140,7 @@
 - "Comment créer un compte ?"
 - "Comment réinitialiser mon mot de passe ?"
 - "Comment enregistrer mon badge ?"
-- "Comment signaler un outil cassé ?"
+- "Comment signaler que la perceuse ne charge plus ?"
 
 **Réponse :**
 - Guide pas à pas
@@ -167,9 +167,10 @@
 
 ### Questions Comparatives
 **Exemples :**
-- "Quelle est la différence entre un rapporteur standard et numérique ?"
-- "Dois-je choisir la pince ampèremétrique ou le multimètre ?"
-- "Quel outil pour mesurer un angle ?"
+- "Quelle est la différence entre la pince à dénuder et le dénudeur automatique ?"
+- "Dois-je utiliser la mini pince coupante ou la pince coupante ?"
+- "Quelle clé pour une vis six pans creux ?"
+- "Tournevis plat ou américain pour ma vis ?"
 
 **Réponse :**
 - Comparaison des caractéristiques
@@ -202,7 +203,6 @@ Bot: Voici comment créer votre compte :
 5. Vérifiez votre email pour activer le compte
 
 Une fois activé, présentez-vous au labo avec votre badge pour l'enregistrer.
-
 Horaires : Lundi-Vendredi 8h-18h, Samedi 9h-12h
 
 Besoin d'autres informations ?
@@ -210,27 +210,25 @@ Besoin d'autres informations ?
 
 ---
 
-### Scénario 2 : Recherche d'Outil Disponible
+### Scénario 2 : Choisir le Bon Outil de Dénudage
 
 **Conversation type :**
 ```
-User: J'ai besoin d'un multimètre
-Bot: Je vérifie la disponibilité des multimètres...
+User: Je veux dénuder des câbles, quel outil prendre ?
+Bot: Il y a deux options disponibles selon votre besoin :
 
-✅ Bonne nouvelle ! Nous avons 2 multimètres disponibles :
-- Multimètre #1 (Compartiment A4)
-- Multimètre #2 (Compartiment A5)
+🔹 Pince à dénuder (T1-005) — Tiroir 1
+   Usage : dénudage manuel, contrôle total de la profondeur
+   Durée d'emprunt : 7 jours | ✅ Disponible
 
-Durée d'emprunt : 7 jours
-Prolongation possible : Oui (2 fois, +3 jours chaque)
+🔹 Dénudeur automatique (T3-001) — Tiroir 3
+   Usage : dénudage rapide et précis, s'adapte au diamètre du fil
+   Durée d'emprunt : 7 jours | ✅ Disponible
 
-Pour l'emprunter :
-1. Venez au laboratoire (horaires : Lun-Ven 8h-18h)
-2. Scannez votre badge sur la servante
-3. Sélectionnez "Multimètre" à l'écran
-4. Récupérez l'outil dans le compartiment indiqué
+👉 Si vous traitez beaucoup de fils ou voulez aller vite → Dénudeur automatique
+👉 Si vous souhaitez un contrôle précis ou travaillez sur peu de fils → Pince à dénuder
 
-Voulez-vous réserver un multimètre pour plus tard ?
+Souhaitez-vous réserver l'un des deux ?
 ```
 
 ---
@@ -239,24 +237,21 @@ Voulez-vous réserver un multimètre pour plus tard ?
 
 **Conversation type :**
 ```
-User: Le multimètre que j'ai emprunté ne s'allume plus
-Bot: Je suis désolé que vous rencontriez ce problème. C'est important de le signaler rapidement.
-
-⚠️ NE CONTINUEZ PAS à utiliser l'outil
-
-Voici ce que vous devez faire :
-1. Allez sur le site web et connectez-vous
-2. Dans "Mes emprunts en cours", cliquez sur le multimètre
-3. Cliquez sur "Signaler un problème"
-4. Sélectionnez "Ne fonctionne pas"
-5. Décrivez le problème (prenez des photos si possible)
+User: La perceuse que j'ai empruntée ne démarre plus
+Bot: Je suis désolé que vous rencontriez ce problème. Voici quelques vérifications rapides :
 
 Avez-vous vérifié :
-- Les piles sont-elles en place ?
-- Y a-t-il un fusible à vérifier ?
-- L'interrupteur fonctionne-t-il ?
+- La batterie est-elle correctement insérée ou chargée ?
+- Le bouton de sécurité est-il déverrouillé ?
+- Y a-t-il un témoin lumineux qui clignote ?
 
-Voulez-vous que je crée un ticket pour vous maintenant ?
+⚠️ Si l'outil ne fonctionne pas malgré ces vérifications :
+1. Connectez-vous sur le site web
+2. Dans "Mes emprunts en cours", cliquez sur la perceuse
+3. Cliquez sur "Signaler un problème"
+4. Sélectionnez "Ne fonctionne pas" et décrivez le problème
+
+Voulez-vous que je crée un ticket de support maintenant ?
 ```
 
 ---
@@ -265,24 +260,50 @@ Voulez-vous que je crée un ticket pour vous maintenant ?
 
 **Conversation type :**
 ```
-User: Puis-je prolonger mon emprunt du jeu de tournevis ?
+User: Puis-je prolonger mon emprunt du pied à coulisse ?
 Bot: Je vérifie votre emprunt...
 
 Emprunt actuel :
-- Outil : Jeu de tournevis d'électronique
-- Date d'emprunt : 10/02/2026
-- Date de retour : 24/02/2026 (dans 10 jours)
+- Outil : Pied à coulisse
+- Date d'emprunt : 20/04/2026
+- Date de retour : 25/04/2026 (dans 3 jours)
 - Prolongations utilisées : 0/2
 
 ✅ Oui, vous pouvez prolonger cet emprunt !
-- Prolongation disponible : +3 jours
-- Nouvelle date de retour : 27/02/2026
+- Prolongation disponible : +2 jours
+- Nouvelle date de retour : 27/04/2026
 - Il vous restera 1 prolongation après celle-ci
 
-Souhaitez-vous prolonger maintenant ? 
+Souhaitez-vous prolonger maintenant ?
 [Oui, prolonger] [Plus tard]
 
-Note: Aucune réservation en attente pour cet outil.
+Note : Aucune réservation en attente pour cet outil.
+```
+
+---
+
+### Scénario 5 : Choisir la Bonne Pince
+
+**Conversation type :**
+```
+User: J'ai besoin d'une pince mais je ne sais pas laquelle choisir
+Bot: Pas de problème ! Voici un résumé des pinces disponibles selon votre usage :
+
+✂️ Pour couper :
+- Mini pince coupante (T3-002) → fils fins, composants
+- Pince coupante (T3-004) → câbles plus épais
+
+🔩 Pour saisir et tenir :
+- Mini pince à bec plat (T1-002) → petites pièces, précision
+- Mini pince à bec rond (T1-003) → cintrage de fils fins
+- Pince à bec plat (T1-004) → usage général
+- Pince universelle (T3-005) → polyvalente (saisir, tordre, couper)
+
+📐 Pour les espaces difficiles d'accès :
+- Pince à bec coudée (T3-006)
+- Mini pince à bec demi-rond coudée (T3-003)
+
+Quel est votre usage précis ?
 ```
 
 ---
@@ -292,26 +313,10 @@ Note: Aucune réservation en attente pour cet outil.
 ### Connexion en Temps Réel
 
 **Le chatbot se connecte à :**
-1. **Base de données des outils**
-   - Disponibilité en temps réel
-   - Statut de chaque outil
-   - Dates de retour prévues
-
-2. **Compte utilisateur**
-   - Emprunts en cours
-   - Historique
-   - Permissions et rôle
-   - Restrictions éventuelles
-
-3. **Système de réservation**
-   - Créer des réservations
-   - Consulter les réservations futures
-   - Annuler des réservations
-
-4. **Base de connaissances**
-   - Documentation des outils
-   - FAQs
-   - Guides et tutoriels
+1. **Base de données des outils** — disponibilité en temps réel, statut, dates de retour
+2. **Compte utilisateur** — emprunts, historique, permissions
+3. **Système de réservation** — créer, consulter, annuler des réservations
+4. **Base de connaissances** — documentation, FAQs, guides
 
 ---
 
@@ -333,40 +338,6 @@ Note: Aucune réservation en attente pour cet outil.
 
 ---
 
-## 🎓 Apprentissage et Amélioration
-
-### Analyse des Conversations
-
-**Le système analyse :**
-- Questions les plus fréquentes
-- Taux de résolution au premier contact
-- Sujets nécessitant escalade vers humain
-- Clarté des réponses
-
-**Amélioration continue :**
-- Ajout de nouvelles réponses aux questions courantes
-- Amélioration des guides existants
-- Optimisation du temps de réponse
-- Personnalisation selon le profil utilisateur
-
----
-
-### Feedback Utilisateur
-
-**Après chaque conversation :**
-- "Cette réponse vous a-t-elle aidé ?" 👍 👎
-- Option de laisser un commentaire
-- Suggestion d'amélioration
-- Signalement si réponse incorrecte
-
-**Utilisation du feedback :**
-- Corrections immédiates si erreur détectée
-- Ajout de précisions si réponse incomplète
-- Mise à jour de la base de connaissances
-- Formation continue du modèle
-
----
-
 ## 🔒 Confidentialité et Sécurité
 
 ### Protection des Données
@@ -385,7 +356,6 @@ Note: Aucune réservation en attente pour cet outil.
 
 **Informations NON accessibles :**
 - Mot de passe (jamais stocké en clair)
-- Numéro de carte bancaire (si paiements)
 - Données d'autres utilisateurs
 - Logs système détaillés
 
@@ -395,15 +365,8 @@ Note: Aucune réservation en attente pour cet outil.
 
 **Pour protéger les utilisateurs :**
 - Le chatbot ne demande JAMAIS de mot de passe
-- Le chatbot ne demande JAMAIS d'informations bancaires
 - Le chatbot ne peut pas désactiver un compte
 - Le chatbot ne peut pas supprimer l'historique d'emprunts
-
-**En cas de demande suspecte :**
-Le chatbot refuse et signale l'administrateur si quelqu'un essaie de :
-- Accéder aux données d'autres utilisateurs
-- Modifier des permissions de manière frauduleuse
-- Contourner les règles du système
 
 ---
 
@@ -414,7 +377,7 @@ Le chatbot refuse et signale l'administrateur si quelqu'un essaie de :
 **Le chatbot transfère vers un humain quand :**
 - La question est trop complexe
 - Décision administrative nécessaire
-- Problème technique non résolu
+- Problème technique non résolu (ex : perceuse en panne)
 - Utilisateur insatisfait de la réponse
 - Urgence détectée
 - Situation exceptionnelle
@@ -428,38 +391,32 @@ Le chatbot refuse et signale l'administrateur si quelqu'un essaie de :
 
 ---
 
-### Continuité du Service
+## 📖 Glossaire pour le Chatbot
 
-**Pendant l'escalade :**
-- Temps d'attente estimé communiqué
-- Possibilité de continuer par email ou téléphone
-- L'historique de conversation est préservé
-- Suivi automatique jusqu'à résolution
+**Termes clés que le chatbot doit reconnaître :**
 
-**Après résolution :**
-- Notification de clôture du ticket
-- Demande de satisfaction
-- Mise à jour de la base de connaissances si nécessaire
+- **Servante** = Robot / Distributeur automatique d'outils
+- **Badge** = Carte RFID / Carte étudiant / Carte de labo
+- **Emprunt** = Prêt / Location (bien que gratuit)
+- **Retour** = Rendu / Restitution
+- **Prolongation** = Extension / Renouvellement
+- **Maintenance** = Réparation / Indisponible / En panne
+- **Disponible** = Libre / Accessible
+- **Tiroir** = Compartiment / Case / Emplacement
+- **Réservation** = Réserver à l'avance / Bloquer
+- **Pénalité** = Sanction / Retard / Blocage
 
----
-
-## 🌐 Multilingue (Futur)
-
-### Langues Supportées (Prévision)
-
-**Actuellement :**
-- Français uniquement
-
-**En développement :**
-- Anglais (Q3 2026)
-- Arabe (Q4 2026)
-- Espagnol (2027)
-
-**Fonctionnalités multilingues :**
-- Détection automatique de la langue
-- Traduction des réponses en temps réel
-- Documentation traduite
-- Support technique dans la langue choisie
+**Synonymes et variantes d'outils :**
+- Multimètre = Testeur / Voltmètre
+- Tournevis américain = Tournevis cruciforme / Tournevis Phillips
+- Tournevis plat = Tournevis à tête fendue
+- Clé L = Clé Allen / Clé hexagonale / Clé six pans
+- Pied à coulisse = Vernier / Calibre
+- Cutteur = Cutter / Couteau à lame rétractable
+- Dénudeur automatique = Dénude-câble automatique / Stripper automatique
+- Pince universelle = Pince multiprise / Pince multifonction
+- Pince à bec plat = Pince plate
+- Pince coupante = Pince diagonale / Pince coupe-fil
 
 ---
 
@@ -483,54 +440,6 @@ Le chatbot refuse et signale l'administrateur si quelqu'un essaie de :
 
 ---
 
-## 🚀 Évolutions Futures
-
-### Fonctionnalités Prévues
-
-**Court terme (2026) :**
-- Reconnaissance vocale
-- Suggestions proactives d'outils
-- Intégration avec calendrier (rappels)
-- Notifications push
-
-**Moyen terme (2027) :**
-- Assistant virtuel complet
-- Analyse prédictive de disponibilité
-- Recommandations personnalisées
-- Tutoriels interactifs intégrés
-
-**Long terme :**
-- Réalité augmentée pour guider dans le laboratoire
-- IA pour diagnostiquer les pannes d'outils
-- Gestion vocale complète de la servante
-- Intégration avec assistants vocaux (Alexa, Google Home)
-
----
-
-## 📖 Glossaire pour le Chatbot
-
-**Termes clés que le chatbot doit reconnaître :**
-
-- **Servante** = Robot / Distributeur automatique d'outils
-- **Badge** = Carte RFID / Carte étudiant / Carte de labo
-- **Emprunt** = Prêt / Location (bien que gratuit)
-- **Retour** = Rendu / Restitution
-- **Prolongation** = Extension / Renouvellement
-- **Maintenance** = Réparation / Indisponible / En panne
-- **Disponible** = Libre / Accessible
-- **Compartiment** = Tiroir / Case / Emplacement
-- **Réservation** = Réserver à l'avance / Bloquer
-- **Pénalité** = Sanction / Retard / Blocage
-
-**Synonymes d'outils :**
-- Multimètre = Testeur / Voltmètre
-- Pince ampèremétrique = Pince de courant
-- Tournevis = Screwdriver
-- Compas = Compas de menuisier
-- Jauge = Calibre
-
----
-
 ## ✅ Checklist pour Nouveaux Contenus
 
 **Avant d'ajouter une nouvelle réponse, vérifier :**
@@ -542,3 +451,8 @@ Le chatbot refuse et signale l'administrateur si quelqu'un essaie de :
 - [ ] Les termes techniques sont-ils expliqués ?
 - [ ] La réponse anticipe-t-elle les questions de suivi ?
 - [ ] Le ton est-il amical et professionnel ?
+
+---
+
+**Dernière mise à jour :** Avril 2026
+**Prochaine révision :** Juillet 2026
