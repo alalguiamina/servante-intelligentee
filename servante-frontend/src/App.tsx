@@ -86,6 +86,7 @@ import ReturnTool from './components/ReturnTool';
 import ProductValidation from './components/ProductValidation';
 import DrawerClosingGuard from './components/DrawerClosingGuard';
 import DrawerOpeningGuard from './components/DrawerOpeningGuard';
+import { DrawerCameraProvider } from './components/DrawerCameraContext';
 
 // ============================================
 // IMPORTS - API Backend
@@ -182,6 +183,7 @@ type Screen =
   | 'tool-selection'
   | 'confirm-borrow'
   | 'drawer-open'
+  | 'drawer-opening-guard'
   | 'drawer-closing-guard'
   | 'product-validation'
   | 'admin-login'
@@ -2351,7 +2353,7 @@ export default function App() {
         setLoading(true);
 
         if (isReturnMode) {
-          // ✅ MODE RETOUR — trouver l'emprunt actif
+          // ✅ MODE RETOUR -- trouver l'emprunt actif
           const activeBorrow = allBorrows.find(
             b => b.toolId === selectedTool.id &&
               b.userName === currentUser.fullName &&
@@ -2373,7 +2375,7 @@ export default function App() {
             setGuardDrawerId(selectedTool.drawer as '1' | '2' | '3' | '4');
             setCurrentScreen('product-validation');
           } else {
-            // Pas de tiroir assigné — retour direct sans YOLO
+            // Pas de tiroir assigné -- retour direct sans YOLO
             const result = await borrowsAPI.markAsReturned(activeBorrow.id);
             if (result.success) {
               showToast(`✅ ${getTranslatedToolName(selectedTool.name)} ${t('returnSuccess')}!`, 'success', 3000);
@@ -2388,7 +2390,7 @@ export default function App() {
             }
           }
         } else {
-          // ✅ MODE EMPRUNT — ouvrir le tiroir, passer par la garde d'ouverture (25s), puis action (10s)
+          // ✅ MODE EMPRUNT -- ouvrir le tiroir, passer par la garde d'ouverture (25s), puis action (10s)
           if (selectedTool.drawer && ['1', '2', '3', '4'].includes(selectedTool.drawer)) {
             hardwareAPI.openDrawer(selectedTool.drawer as '1' | '2' | '3' | '4').catch(() => {
               console.warn('⚠️ Tiroir non disponible');
@@ -2696,7 +2698,7 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${previewReady ? 'bg-green-400' : 'bg-yellow-400'}`} />
                       <span className="text-white text-sm font-semibold">
-                        {previewReady ? 'LIVE — Détection YOLO' : 'Chargement du modèle…'}
+                        {previewReady ? 'LIVE -- Détection YOLO' : 'Chargement du modèle…'}
                       </span>
                     </div>
                     <span className="text-slate-400 text-xs">Tiroir {getDrawerNumber(selectedTool.drawer || '')}</span>
@@ -2706,10 +2708,10 @@ export default function App() {
                     {!previewReady && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-yellow-400" />
-                        <span className="text-slate-400 text-xs">best (2).pt — chargement modèle…</span>
+                        <span className="text-slate-400 text-xs">best (2).pt -- chargement modèle…</span>
                       </div>
                     )}
-                    {/* Camera image — opacity-0 until loaded, then fades in */}
+                    {/* Camera image -- opacity-0 until loaded, then fades in */}
                     {previewTs > 0 && (
                       <img
                         src={`${API_BASE_URL.replace('/api', '')}/api/hardware/camera/preview?t=${previewTs}`}
@@ -2753,7 +2755,7 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${cameraFrameTs > 0 ? 'bg-red-400' : 'bg-yellow-400'}`} />
                       <span className="text-white text-sm font-bold">
-                        {cameraFrameTs > 0 ? 'LIVE — Détection en cours' : 'Chargement du modèle…'}
+                        {cameraFrameTs > 0 ? 'LIVE -- Détection en cours' : 'Chargement du modèle…'}
                       </span>
                     </div>
                     <div className="flex items-center gap-3">
@@ -4534,20 +4536,194 @@ export default function App() {
   }
 
   // ============================================
-  // ÉCRAN - VALIDATION PRODUIT IA
+  // ÉCRANS - OPÉRATION TIROIR (ouverture → validation → fermeture)
+  // DrawerCameraProvider reste monté pendant toute l'opération pour que la
+  // caméra ne s'arrête jamais entre les phases -- zéro temps mort de détection.
   // ============================================
-  if (currentScreen === 'product-validation' && selectedTool) {
-    const closeDrawer = () => {
-      if (selectedTool?.drawer && ['1','2','3','4'].includes(selectedTool.drawer)) {
-        hardwareAPI.closeDrawer(selectedTool.drawer as '1'|'2'|'3'|'4').catch(() => {});
-      }
-    };
+  if (
+    guardDrawerId && (
+      currentScreen === 'drawer-opening-guard' ||
+      currentScreen === 'drawer-closing-guard' ||
+      (currentScreen === 'product-validation' && !!selectedTool)
+    )
+  ) {
+    const dId = guardDrawerId as '1'|'2'|'3'|'4';
     const resetValidation = () => {
       setSelectedTool(null);
       setActiveBorrowId(null);
       setValidationRequired(false);
       setIsReturnMode(false);
-      setGuardSnapshot([]); // Clear snapshot after validation
+      setGuardSnapshot([]);
+    };
+    return (
+      <DrawerCameraProvider>
+        {currentScreen === 'drawer-opening-guard' && (
+          <DrawerOpeningGuard
+            drawerId={dId}
+            onComplete={(snapshot) => {
+              setGuardSnapshot(snapshot);
+              setCurrentScreen('product-validation');
+            }}
+          />
+        )}
+        {currentScreen === 'product-validation' && selectedTool && (
+          <ProductValidation
+            key={detectionRetryKey}
+            toolName={selectedTool.name}
+            borrowId={activeBorrowId || ''}
+            drawerId={selectedTool.drawer || undefined}
+            action={isReturnMode ? 'return' : 'borrow'}
+            isRetry={detectionRetryKey > 0}
+            initialSnapshot={guardSnapshot.length > 0 ? guardSnapshot : undefined}
+            onValidationSuccess={async () => {
+              const pvDid = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
+              try {
+                if (isReturnMode && activeBorrowId) {
+                  await borrowsAPI.markAsReturned(activeBorrowId);
+                  showToast('✅ Retour validé !', 'success', 3000);
+                } else {
+                  const result = await borrowsAPI.borrow(currentUser!.id, selectedTool.id, 1);
+                  if (result.success) {
+                    showToast('✅ Emprunt confirmé !', 'success', 3000);
+                  } else {
+                    showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
+                  }
+                }
+              } catch {
+                showToast('❌ Erreur réseau -- veuillez vérifier votre connexion', 'error', 4000);
+              } finally {
+                resetValidation();
+                if (pvDid && ['1','2','3','4'].includes(pvDid)) {
+                  setGuardDrawerId(pvDid);
+                  setCurrentScreen('drawer-closing-guard');
+                } else {
+                  setCurrentScreen('tool-selection');
+                }
+                loadBorrowsFromBackend().catch(() => {});
+                loadToolsFromBackend().catch(() => {});
+              }
+            }}
+            onValidationFailure={async (reason) => {
+              const pvDid = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
+              showToast(`❌ ${reason}`, 'error', 3000);
+              resetValidation();
+              if (pvDid && ['1','2','3','4'].includes(pvDid)) {
+                setGuardDrawerId(pvDid);
+                setCurrentScreen('drawer-closing-guard');
+              } else {
+                setCurrentScreen('tool-selection');
+              }
+              loadBorrowsFromBackend().catch(() => {});
+              loadToolsFromBackend().catch(() => {});
+            }}
+            onRetry={() => {
+              setDetectionRetryKey(k => k + 1);
+            }}
+            onBorrowAlternative={async (wrongToolName: string) => {
+              const pvDid = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
+              const wrongTool = tools.find(
+                t => t.name.toLowerCase().trim() === wrongToolName.toLowerCase().trim()
+              );
+              try {
+                if (!wrongTool || wrongTool.availableQuantity <= 0) {
+                  showToast('Cet outil n\'est pas disponible', 'error', 3000);
+                } else {
+                  const result = await borrowsAPI.borrow(currentUser!.id, wrongTool.id, 1);
+                  if (result.success) {
+                    showToast(`✅ Emprunt de "${wrongToolName}" confirmé !`, 'success', 3000);
+                  } else {
+                    showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
+                  }
+                }
+              } catch {
+                showToast('❌ Erreur réseau -- veuillez vérifier votre connexion', 'error', 4000);
+              } finally {
+                resetValidation();
+                if (pvDid && ['1','2','3','4'].includes(pvDid)) {
+                  setGuardDrawerId(pvDid);
+                  setCurrentScreen('drawer-closing-guard');
+                } else {
+                  setCurrentScreen('tool-selection');
+                }
+                loadBorrowsFromBackend().catch(() => {});
+                loadToolsFromBackend().catch(() => {});
+              }
+            }}
+            onExtraToolsDetected={async (extraToolNames: string[]) => {
+              if (!currentUser || !selectedTool) return;
+              try {
+                await borrowsAPI.sendExtraToolsWarning({
+                  userId: currentUser.id,
+                  expectedToolName: selectedTool.name,
+                  extraToolNames,
+                  drawer: selectedTool.drawer,
+                });
+                showToast('⚠️ Avertissement envoye a l\'utilisateur et a l\'administrateur', 'info', 4000);
+              } catch (error) {
+                console.warn('Erreur envoi avertissement outils supplémentaires:', error);
+              }
+            }}
+            onSkip={() => {
+              const pvDid = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
+              resetValidation();
+              if (pvDid && ['1','2','3','4'].includes(pvDid)) {
+                setGuardDrawerId(pvDid);
+                setCurrentScreen('drawer-closing-guard');
+              } else {
+                setCurrentScreen('tool-selection');
+              }
+            }}
+          />
+        )}
+        {currentScreen === 'drawer-closing-guard' && (
+          <DrawerClosingGuard
+            drawerId={dId}
+            onComplete={async () => {
+              setGuardDrawerId(null);
+              await loadBorrowsFromBackend();
+              await loadToolsFromBackend();
+              setCurrentScreen('tool-selection');
+            }}
+            onBorrowStolenTools={async (toolDisplayNames) => {
+              if (!currentUser) return;
+              const normalize = (s: string) => s.toLowerCase().trim()
+                .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/-/g, ' ');
+              let registeredCount = 0;
+              for (const name of toolDisplayNames) {
+                const tool = tools.find(t => normalize(t.name) === normalize(name));
+                if (tool && tool.availableQuantity > 0) {
+                  try {
+                    await borrowsAPI.borrow(currentUser.id, tool.id, 1);
+                    registeredCount++;
+                  } catch {
+                    console.error('Failed to register borrow for:', name);
+                  }
+                }
+              }
+              loadBorrowsFromBackend().catch(() => {});
+              loadToolsFromBackend().catch(() => {});
+              if (registeredCount > 0) {
+                showToast(`✅ Emprunt${registeredCount > 1 ? 's' : ''} enregistré${registeredCount > 1 ? 's' : ''} (${registeredCount})`, 'success', 3000);
+              } else {
+                showToast('⚠️ Outil non trouvé dans la base de données', 'warning', 3000);
+              }
+            }}
+          />
+        )}
+      </DrawerCameraProvider>
+    );
+  }
+
+  // ============================================
+  // ÉCRAN - VALIDATION PRODUIT IA (sans tiroir physique)
+  // ============================================
+  if (currentScreen === 'product-validation' && selectedTool && !guardDrawerId) {
+    const resetValidation = () => {
+      setSelectedTool(null);
+      setActiveBorrowId(null);
+      setValidationRequired(false);
+      setIsReturnMode(false);
+      setGuardSnapshot([]);
     };
 
     return (
@@ -4560,7 +4736,6 @@ export default function App() {
         isRetry={detectionRetryKey > 0}
         initialSnapshot={guardSnapshot.length > 0 ? guardSnapshot : undefined}
         onValidationSuccess={async () => {
-          // Capture dId before any await so it's always available even if the API throws
           const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           try {
             if (isReturnMode && activeBorrowId) {
@@ -4575,9 +4750,8 @@ export default function App() {
               }
             }
           } catch {
-            showToast('❌ Erreur réseau — veuillez vérifier votre connexion', 'error', 4000);
+            showToast('❌ Erreur réseau -- veuillez vérifier votre connexion', 'error', 4000);
           } finally {
-            // Always navigate away so the spinner can never get stuck
             resetValidation();
             if (dId && ['1','2','3','4'].includes(dId)) {
               setGuardDrawerId(dId);
@@ -4622,7 +4796,7 @@ export default function App() {
               }
             }
           } catch {
-            showToast('❌ Erreur réseau — veuillez vérifier votre connexion', 'error', 4000);
+            showToast('❌ Erreur réseau -- veuillez vérifier votre connexion', 'error', 4000);
           } finally {
             resetValidation();
             if (dId && ['1','2','3','4'].includes(dId)) {
@@ -4644,9 +4818,9 @@ export default function App() {
               extraToolNames,
               drawer: selectedTool.drawer,
             });
-            showToast('⚠️ Avertissement envoyé à l’utilisateur et à l’administrateur', 'info', 4000);
+            showToast('⚠️ Avertissement envoye a l\'utilisateur et a l\'administrateur', 'info', 4000);
           } catch (error) {
-            console.warn('Erreur envoi avertissement outils supplémentaires:', error);
+            console.warn('Erreur envoi avertissement outils supplementaires:', error);
           }
         }}
         onSkip={() => {
@@ -4657,63 +4831,6 @@ export default function App() {
             setCurrentScreen('drawer-closing-guard');
           } else {
             setCurrentScreen('tool-selection');
-          }
-        }}
-      />
-    );
-  }
-
-  // ============================================
-  // ÉCRAN - SURVEILLANCE OUVERTURE TIROIR
-  // ============================================
-  if (currentScreen === 'drawer-opening-guard' && guardDrawerId) {
-    return (
-      <DrawerOpeningGuard
-        drawerId={guardDrawerId}
-        onComplete={(snapshot) => {
-          setGuardSnapshot(snapshot);
-          setCurrentScreen('product-validation');
-        }}
-      />
-    );
-  }
-
-  // ============================================
-  // ÉCRAN - SURVEILLANCE FERMETURE TIROIR
-  // ============================================
-  if (currentScreen === 'drawer-closing-guard' && guardDrawerId) {
-    return (
-      <DrawerClosingGuard
-        drawerId={guardDrawerId}
-        onComplete={async () => {
-          setGuardDrawerId(null);
-          // Reload data after closing guard completes (for both borrow and return flows)
-          await loadBorrowsFromBackend();
-          await loadToolsFromBackend();
-          setCurrentScreen('tool-selection');
-        }}
-        onBorrowStolenTools={async (toolDisplayNames) => {
-          if (!currentUser) return;
-          const normalize = (s: string) => s.toLowerCase().trim()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/-/g, ' ');
-          let registeredCount = 0;
-          for (const name of toolDisplayNames) {
-            const tool = tools.find(t => normalize(t.name) === normalize(name));
-            if (tool && tool.availableQuantity > 0) {
-              try {
-                await borrowsAPI.borrow(currentUser.id, tool.id, 1);
-                registeredCount++;
-              } catch {
-                console.error('Failed to register borrow for:', name);
-              }
-            }
-          }
-          loadBorrowsFromBackend().catch(() => {});
-          loadToolsFromBackend().catch(() => {});
-          if (registeredCount > 0) {
-            showToast(`✅ Emprunt${registeredCount > 1 ? 's' : ''} enregistré${registeredCount > 1 ? 's' : ''} (${registeredCount})`, 'success', 3000);
-          } else {
-            showToast('⚠️ Outil non trouvé dans la base de données', 'warning', 3000);
           }
         }}
       />
@@ -5916,7 +6033,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Modale Emprunts Actifs — marquer comme retourné */}
+          {/* Modale Emprunts Actifs -- marquer comme retourné */}
           {activeBorrowsModalTool && (() => {
             const activeBorrows = allBorrows.filter(
               b => b.toolId === activeBorrowsModalTool.id &&
@@ -5928,7 +6045,7 @@ export default function App() {
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="text-xl font-bold text-slate-900">
-                        Emprunts actifs — {getTranslatedToolName(activeBorrowsModalTool.name)}
+                        Emprunts actifs -- {getTranslatedToolName(activeBorrowsModalTool.name)}
                       </h3>
                       <p className="text-sm text-slate-500 mt-1">
                         {activeBorrows.length} emprunt{activeBorrows.length > 1 ? 's' : ''} en cours

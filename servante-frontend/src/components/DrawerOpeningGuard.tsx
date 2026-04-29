@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, AlertTriangle, CheckCircle, Loader, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { API_BASE_URL, hardwareAPI } from '../services/api';
+import { useDrawerCamera } from './DrawerCameraContext';
 
 interface Detection {
   class: string;
@@ -8,25 +8,14 @@ interface Detection {
   x: number; y: number; w: number; h: number;
 }
 
-interface DetectionResult {
-  success: boolean;
-  detections: Detection[];
-  annotated_image?: string | null;
-  error?: string;
-}
-
 interface DrawerOpeningGuardProps {
   drawerId: '1' | '2' | '3' | '4';
   onComplete: (snapshot: Detection[]) => void;
 }
 
-const CAPTURE_W = 640;
-const CAPTURE_H = 360;
-const HAND_CONFIRM_FRAMES = 2;
+const HAND_CONFIRM_FRAMES  = 2;
 const CLEAR_CONFIRM_FRAMES = 4;
-const GUARD_SECONDS = 25;
-
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+const GUARD_SECONDS        = 25;
 
 type GuardPhase = 'monitoring' | 'hand-detected' | 'alert' | 'safe';
 
@@ -52,58 +41,44 @@ const DISPLAY: Record<string, string> = {
 const displayName = (cls: string) => DISPLAY[cls] ?? cls;
 
 const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onComplete }) => {
-  const videoRef   = useRef<HTMLVideoElement>(null);
-  const captureRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  const isRunningRef       = useRef(true);
-  const phaseRef           = useRef<GuardPhase>('monitoring');
-  const handCountRef       = useRef(0);
-  const clearCountRef      = useRef(0);
-  const bestPreHandSnapRef = useRef<string[]>([]);
-  const bestDetections1Ref = useRef<Detection[]>([]); // Full detections for ProductValidation
-  const missingCountRef    = useRef<Record<string, number>>({});
-  const stolenRef          = useRef<string[]>([]);
-  const timerPausedRef     = useRef(false);
+  const camCtx = useDrawerCamera();
 
-  const [phase,          setPhase]          = useState<GuardPhase>('monitoring');
-  const [cameraReady,    setCameraReady]    = useState(false);
-  const [annotatedImage, setAnnotatedImage] = useState<string | null>(null);
-  const [loading,        setLoading]        = useState(false);
-  const [serverReady,    setServerReady]    = useState(false);
-  const [stolenTools,    setStolenTools]    = useState<string[]>([]);
-  const [timeLeft,       setTimeLeft]       = useState(GUARD_SECONDS);
+  // Derive camera state from shared context (already warm — no restart needed).
+  const cameraReady    = camCtx?.cameraReady      ?? false;
+  const serverReady    = camCtx?.serverReady       ?? false;
+  const annotatedImage = camCtx?.annotatedImage    ?? null;
+  const latestDets     = camCtx?.latestDetections  ?? [];
 
+  const isRunningRef        = useRef(true);
+  const phaseRef            = useRef<GuardPhase>('monitoring');
+  const handCountRef        = useRef(0);
+  const clearCountRef       = useRef(0);
+  const bestPreHandSnapRef  = useRef<string[]>([]);
+  const bestDetections1Ref  = useRef<Detection[]>([]);
+  const missingCountRef     = useRef<Record<string, number>>({});
+  const stolenRef           = useRef<string[]>([]);
+  const timerPausedRef      = useRef(false);
+
+  const [phase,       setPhase]       = useState<GuardPhase>('monitoring');
+  const [stolenTools, setStolenTools] = useState<string[]>([]);
+  const [timeLeft,    setTimeLeft]    = useState(GUARD_SECONDS);
+
+  // Keep phase ref and timer-pause flag in sync.
   useEffect(() => {
-    phaseRef.current = phase;
+    phaseRef.current     = phase;
     timerPausedRef.current = phase === 'alert';
   }, [phase]);
 
-  const stopCamera = useCallback(() => {
-    if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-      videoRef.current.srcObject = null;
-    }
-  }, []);
-
-  // Camera start
+  // Attach the shared stream to our display video element — no getUserMedia call.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let stream: MediaStream | null = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-        });
-      } catch {
-        try { stream = await navigator.mediaDevices.getUserMedia({ video: true }); } catch { return; }
-      }
-      if (!cancelled && videoRef.current && stream) videoRef.current.srcObject = stream;
-      else if (stream) stream.getTracks().forEach(t => t.stop());
-    })();
-    return () => { cancelled = true; stopCamera(); setCameraReady(false); };
-  }, [stopCamera]);
+    if (camCtx?.stream && videoRef.current) {
+      videoRef.current.srcObject = camCtx.stream;
+    }
+  }, [camCtx?.stream]);
 
-  // Countdown — paused during alert
+  // Countdown — paused while alert is shown.
   useEffect(() => {
     const t = setInterval(() => {
       setTimeLeft(prev => {
@@ -111,7 +86,6 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
         if (prev <= 1) {
           clearInterval(t);
           isRunningRef.current = false;
-          stopCamera();
           phaseRef.current = 'safe';
           setPhase('safe');
           return 0;
@@ -120,9 +94,10 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [stopCamera]);
+  }, []);
 
-  // safe → proceed to product-validation with snapshot
+  // Hand off the best snapshot and proceed to product-validation.
+  // Camera stays alive — context owns it.
   useEffect(() => {
     if (phase === 'safe') {
       const t = setTimeout(() => onComplete(bestDetections1Ref.current), 1500);
@@ -130,135 +105,110 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
     }
   }, [phase, onComplete]);
 
-  // Detection loop
+  // ── Detection state-machine driven by the shared context loop ──────────────
+  // Every time the context emits a new detection result we process one "frame".
   useEffect(() => {
-    if (!cameraReady) return;
-    let active = true;
-    (async () => {
-      while (active && isRunningRef.current) {
-        const video = videoRef.current;
-        const canvas = captureRef.current;
-        if (!video || !canvas || video.readyState < 2) { await sleep(100); continue; }
-        const ctx = canvas.getContext('2d');
-        if (!ctx) break;
-        ctx.drawImage(video, 0, 0, CAPTURE_W, CAPTURE_H);
-        const frameData = canvas.toDataURL('image/jpeg', 0.75);
-        setLoading(true);
-        try {
-          const resp = await fetch(`${API_BASE_URL}/detection/detect`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: frameData }),
-          });
-          if (!resp.ok) { await sleep(300); continue; }
-          const result: DetectionResult = await resp.json();
-          if (!result.success) { await sleep(500); continue; }
+    if (!cameraReady || !serverReady || !isRunningRef.current) return;
 
-          if (result.annotated_image) setAnnotatedImage(result.annotated_image);
-          setServerReady(true);
+    const dets       = latestDets;
+    const hasHand    = dets.some(d => d.class.toLowerCase() === 'main');
+    const toolClasses = dets
+      .filter(d => d.class.toLowerCase() !== 'main')
+      .map(d => d.class);
+    const toolDets = dets.filter(d => d.class.toLowerCase() !== 'main');
 
-          const dets = result.detections ?? [];
-          const hasHand = dets.some(d => d.class.toLowerCase() === 'main');
-          const toolClasses = dets
-            .filter(d => d.class.toLowerCase() !== 'main')
-            .map(d => d.class);
+    const cur = phaseRef.current;
 
-          const cur = phaseRef.current;
+    // ── CONTINUOUS: Always capture best tool snapshot (most tools = drawer fully visible) ───────
+    // This ensures we have valid tool detections even if early frames are blurry during drawer opening
+    if (toolClasses.length > 0 && toolClasses.length >= bestPreHandSnapRef.current.length) {
+      bestPreHandSnapRef.current = [...toolClasses];
+      bestDetections1Ref.current = [...toolDets];
+    }
 
-          // ── monitoring ─────────────────────────────────────────────────────
-          if (cur === 'monitoring') {
-            if (hasHand) {
-              clearCountRef.current = 0;
-              handCountRef.current += 1;
-              if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
-                handCountRef.current = 0;
-                missingCountRef.current = {};
-                phaseRef.current = 'hand-detected';
-                setPhase('hand-detected');
-              }
-            } else {
-              handCountRef.current = 0;
-              if (toolClasses.length >= bestPreHandSnapRef.current.length) {
-                bestPreHandSnapRef.current = [...toolClasses];
-                bestDetections1Ref.current = dets.filter(d => d.class.toLowerCase() !== 'main');
-              }
-            }
-          }
-
-          // ── hand-detected: wait for hand to leave ──────────────────────────
-          else if (cur === 'hand-detected') {
-            if (!hasHand) {
-              clearCountRef.current += 1;
-              bestPreHandSnapRef.current.forEach(cls => {
-                const present = toolClasses.some(c => c.toLowerCase() === cls.toLowerCase());
-                if (!present) {
-                  missingCountRef.current[cls] = (missingCountRef.current[cls] ?? 0) + 1;
-                }
-              });
-              if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
-                clearCountRef.current = 0;
-                const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2);
-                const stolen = bestPreHandSnapRef.current.filter(
-                  cls => (missingCountRef.current[cls] ?? 0) >= threshold
-                );
-                missingCountRef.current = {};
-                if (stolen.length > 0) {
-                  stolenRef.current = stolen;
-                  setStolenTools(stolen);
-                  phaseRef.current = 'alert';
-                  setPhase('alert');
-                } else {
-                  // Nothing taken — continue monitoring (don't restart motor)
-                  phaseRef.current = 'monitoring';
-                  setPhase('monitoring');
-                }
-              }
-            } else {
-              clearCountRef.current = 0;
-            }
-          }
-
-          // ── alert: wait for stolen tool(s) to come back ────────────────────
-          else if (cur === 'alert') {
-            const allBack = stolenRef.current.every(
-              cls => toolClasses.some(c => c.toLowerCase() === cls.toLowerCase())
-            );
-            if (allBack && !hasHand) {
-              clearCountRef.current += 1;
-              if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
-                clearCountRef.current = 0;
-                stolenRef.current = [];
-                setStolenTools([]);
-                bestPreHandSnapRef.current = [...toolClasses];
-                missingCountRef.current = {};
-                // Tool returned — continue monitoring (opening already done)
-                phaseRef.current = 'monitoring';
-                setPhase('monitoring');
-              }
-            } else {
-              clearCountRef.current = 0;
-            }
-          }
-
-        } catch { await sleep(500); }
-        finally { setLoading(false); }
+    // ── monitoring ─────────────────────────────────────────────────────────
+    if (cur === 'monitoring') {
+      if (hasHand) {
+        clearCountRef.current = 0;
+        handCountRef.current += 1;
+        if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
+          handCountRef.current = 0;
+          missingCountRef.current = {};
+          phaseRef.current = 'hand-detected';
+          setPhase('hand-detected');
+        }
+      } else {
+        handCountRef.current = 0;
       }
-    })();
-    return () => { active = false; };
-  }, [cameraReady, drawerId]);
+    }
+
+    // ── hand-detected: wait for hand to leave ──────────────────────────────
+    else if (cur === 'hand-detected') {
+      if (!hasHand) {
+        clearCountRef.current += 1;
+        bestPreHandSnapRef.current.forEach(cls => {
+          const present = toolClasses.some(c => c.toLowerCase() === cls.toLowerCase());
+          if (!present) {
+            missingCountRef.current[cls] = (missingCountRef.current[cls] ?? 0) + 1;
+          }
+        });
+        if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
+          clearCountRef.current = 0;
+          const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2);
+          const stolen = bestPreHandSnapRef.current.filter(
+            cls => (missingCountRef.current[cls] ?? 0) >= threshold
+          );
+          missingCountRef.current = {};
+          if (stolen.length > 0) {
+            stolenRef.current = stolen;
+            setStolenTools(stolen);
+            phaseRef.current = 'alert';
+            setPhase('alert');
+          } else {
+            phaseRef.current = 'monitoring';
+            setPhase('monitoring');
+          }
+        }
+      } else {
+        clearCountRef.current = 0;
+      }
+    }
+
+    // ── alert: wait for stolen tool(s) to come back ────────────────────────
+    else if (cur === 'alert') {
+      const allBack = stolenRef.current.every(
+        cls => toolClasses.some(c => c.toLowerCase() === cls.toLowerCase())
+      );
+      if (allBack && !hasHand) {
+        clearCountRef.current += 1;
+        if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
+          clearCountRef.current = 0;
+          stolenRef.current = [];
+          setStolenTools([]);
+          bestPreHandSnapRef.current = [...toolClasses];
+          missingCountRef.current = {};
+          phaseRef.current = 'monitoring';
+          setPhase('monitoring');
+        }
+      } else {
+        clearCountRef.current = 0;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestDets, cameraReady, serverReady]);
 
   // ── UI ─────────────────────────────────────────────────────────────────────
 
   const borderColor =
-    phase === 'alert'          ? 'border-red-500'
-    : phase === 'hand-detected'? 'border-amber-500'
-    : phase === 'safe'         ? 'border-green-500'
+    phase === 'alert'           ? 'border-red-500'
+    : phase === 'hand-detected' ? 'border-amber-500'
+    : phase === 'safe'          ? 'border-green-500'
     : 'border-blue-300';
 
   const bgColor =
-    phase === 'alert'          ? 'from-red-50 via-white to-orange-50'
-    : phase === 'hand-detected'? 'from-amber-50 via-white to-orange-50'
-    : phase === 'safe'         ? 'from-green-50 via-white to-blue-50'
+    phase === 'alert'           ? 'from-red-50 via-white to-orange-50'
+    : phase === 'hand-detected' ? 'from-amber-50 via-white to-orange-50'
+    : phase === 'safe'          ? 'from-green-50 via-white to-blue-50'
     : 'from-blue-50 via-white to-slate-50';
 
   return (
@@ -330,9 +280,7 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
             <video ref={videoRef} autoPlay playsInline muted
               className="absolute inset-0 w-full h-full object-cover"
               style={{ opacity: cameraReady && !annotatedImage ? 1 : 0 }}
-              onCanPlay={() => setCameraReady(true)}
             />
-            <canvas ref={captureRef} className="hidden" width={CAPTURE_W} height={CAPTURE_H} />
             {annotatedImage && (
               <img src={`data:image/jpeg;base64,${annotatedImage}`} alt="YOLO"
                 className="absolute inset-0 w-full h-full object-cover" />
@@ -347,12 +295,6 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 z-10">
                 <Loader className="w-10 h-10 text-yellow-400 animate-spin mb-3" />
                 <p className="text-slate-300 text-sm">Chargement YOLO...</p>
-              </div>
-            )}
-            {loading && serverReady && (
-              <div className="absolute top-3 left-3 bg-blue-600/85 px-2 py-1 rounded-lg flex items-center gap-2 z-20">
-                <Loader className="w-3 h-3 text-white animate-spin" />
-                <span className="text-white text-xs font-medium">YOLO...</span>
               </div>
             )}
             {phase === 'monitoring' && (

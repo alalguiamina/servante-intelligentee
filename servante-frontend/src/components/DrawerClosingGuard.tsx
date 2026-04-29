@@ -1,19 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, AlertTriangle, CheckCircle, Loader, ShieldAlert, ShieldCheck, Package } from 'lucide-react';
-import { API_BASE_URL, hardwareAPI } from '../services/api';
-
-interface Detection {
-  class: string;
-  confidence: number;
-  x: number; y: number; w: number; h: number;
-}
-
-interface DetectionResult {
-  success: boolean;
-  detections: Detection[];
-  annotated_image?: string | null;
-  error?: string;
-}
+import { hardwareAPI } from '../services/api';
+import { useDrawerCamera } from './DrawerCameraContext';
 
 interface DrawerClosingGuardProps {
   drawerId: '1' | '2' | '3' | '4';
@@ -21,17 +9,13 @@ interface DrawerClosingGuardProps {
   onBorrowStolenTools?: (toolClassNames: string[]) => Promise<void>;
 }
 
-const CAPTURE_W = 640;
-const CAPTURE_H = 360;
-const HAND_CONFIRM_FRAMES = 2;
+const HAND_CONFIRM_FRAMES  = 2;
 const CLEAR_CONFIRM_FRAMES = 4;
-const GUARD_SECONDS = 15;
-const CLOSE_RESUME_SECONDS = 15; // temps accordé après reprise moteur
-const DRAWER_CLOSE_MS = 13000;   // durée estimée de fermeture complète du tiroir
-const STABILIZE_FRAMES = 3;      // frames to collect before comparison (allow tool visibility before grab)
-const TOOL_CONFIRM_FRAMES = 3;   // frames a tool must appear in during monitoring to be considered real
-
-const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+const GUARD_SECONDS        = 15;
+const CLOSE_RESUME_SECONDS = 15;
+const DRAWER_CLOSE_MS      = 13000;
+const STABILIZE_FRAMES     = 3;
+const TOOL_CONFIRM_FRAMES  = 3;
 
 type GuardPhase = 'monitoring' | 'hand-detected' | 'borrow-confirm' | 'alert' | 'safe';
 
@@ -57,77 +41,67 @@ const DISPLAY: Record<string, string> = {
 const displayName = (cls: string) => DISPLAY[cls] ?? cls;
 
 const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onComplete, onBorrowStolenTools }) => {
-  const videoRef   = useRef<HTMLVideoElement>(null);
-  const captureRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  const isRunningRef        = useRef(true);
-  const phaseRef            = useRef<GuardPhase>('monitoring');
-  const handCountRef        = useRef(0);
-  const clearCountRef       = useRef(0);
-  const bestPreHandSnapRef  = useRef<string[]>([]);
-  const lastFrameBeforeHandRef = useRef<string[]>([]); // ← FREEZE last frame right before hand detected
-  const missingCountRef     = useRef<Record<string, number>>({});
-  const stolenRef           = useRef<string[]>([]);
-  const timerPausedRef             = useRef(false);
-  const borrowAutoTimerRef         = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onBorrowStolenToolsRef     = useRef(onBorrowStolenTools);
+  const camCtx = useDrawerCamera();
 
-  // Motor state tracking — prevents sending commands to a motor already at end-stop
-  const motorRunningRef          = useRef(true);  // true while we believe the motor is still moving
-  const motorStoppedByUsRef      = useRef(false); // true if WE issued stopMotors()
-  const motorWasRunningAtHandRef = useRef(false); // was motor moving when hand was first confirmed?
+  // Derive camera state from shared context — camera is already running.
+  const cameraReady    = camCtx?.cameraReady     ?? false;
+  const serverReady    = camCtx?.serverReady      ?? false;
+  const annotatedImage = camCtx?.annotatedImage   ?? null;
+  const latestDets     = camCtx?.latestDetections ?? [];
+
+  const isRunningRef             = useRef(true);
+  const phaseRef                 = useRef<GuardPhase>('monitoring');
+  const handCountRef             = useRef(0);
+  const clearCountRef            = useRef(0);
+  const bestPreHandSnapRef       = useRef<string[]>([]);
+  const lastFrameBeforeHandRef   = useRef<string[]>([]);
+  const missingCountRef          = useRef<Record<string, number>>({});
+  const stolenRef                = useRef<string[]>([]);
+  const timerPausedRef           = useRef(false);
+  const borrowAutoTimerRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onBorrowStolenToolsRef   = useRef(onBorrowStolenTools);
+
+  const motorRunningRef          = useRef(true);
+  const motorStoppedByUsRef      = useRef(false);
+  const motorWasRunningAtHandRef = useRef(false);
   const closeTimerRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stabilizingFramesRef     = useRef(0);    // frames after motor stop before comparing
-  const preHandToolCountRef      = useRef<Record<string, number>>({});  // per-tool frame count during monitoring
+  const stabilizingFramesRef     = useRef(0);
+  const preHandToolCountRef      = useRef<Record<string, number>>({});
 
   const [phase,                setPhase]                = useState<GuardPhase>('monitoring');
-  const [cameraReady,          setCameraReady]          = useState(false);
-  const [annotatedImage,       setAnnotatedImage]       = useState<string | null>(null);
-  const [loading,              setLoading]              = useState(false);
-  const [serverReady,          setServerReady]          = useState(false);
   const [stolenTools,          setStolenTools]          = useState<string[]>([]);
   const [timeLeft,             setTimeLeft]             = useState(GUARD_SECONDS);
   const [borrowConfirmLoading, setBorrowConfirmLoading] = useState(false);
   const [drawerWasMoving,      setDrawerWasMoving]      = useState(false);
   const [autoBorrowCountdown,  setAutoBorrowCountdown]  = useState(8);
 
-  const stopCamera = useCallback(() => {
-    if (videoRef.current?.srcObject) {
-      (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-      videoRef.current.srcObject = null;
-    }
-  }, []);
-
-  // Start (or restart) the "motor still running" timer
-  const startCloseTimer = useCallback(() => {
-    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
-    motorRunningRef.current = true;
-    motorStoppedByUsRef.current = false; // reset since we're restarting the motor
-    closeTimerRef.current = setTimeout(() => {
-      motorRunningRef.current = false; // drawer reached end-stop, motor stopped naturally
-    }, DRAWER_CLOSE_MS);
-  }, []);
-
-  // Keep ref in sync with latest prop without adding it to effect deps
   useEffect(() => { onBorrowStolenToolsRef.current = onBorrowStolenTools; }, [onBorrowStolenTools]);
 
-  // Pause timer during borrow-confirm and alert
   useEffect(() => {
-    phaseRef.current = phase;
+    phaseRef.current       = phase;
     timerPausedRef.current = phase === 'alert' || phase === 'borrow-confirm';
   }, [phase]);
 
-  // Auto-borrow timer: 8 seconds to auto-confirm if user doesn't click
+  const startCloseTimer = useCallback(() => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    motorRunningRef.current     = true;
+    motorStoppedByUsRef.current = false;
+    closeTimerRef.current = setTimeout(() => {
+      motorRunningRef.current = false;
+    }, DRAWER_CLOSE_MS);
+  }, []);
+
+  // Auto-borrow countdown when borrow-confirm phase is active.
   useEffect(() => {
     if (phase !== 'borrow-confirm') return;
-
     setAutoBorrowCountdown(8);
     let isActive = true;
     const timer = setInterval(() => {
       setAutoBorrowCountdown(prev => {
         if (prev <= 1 && isActive) {
           clearInterval(timer);
-          // Auto-borrow after 8 seconds
           if (stolenRef.current.length > 0) {
             (async () => {
               setBorrowConfirmLoading(true);
@@ -158,7 +132,6 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
       });
     }, 1000);
     borrowAutoTimerRef.current = timer as any;
-
     return () => {
       isActive = false;
       clearInterval(timer);
@@ -166,7 +139,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     };
   }, [phase, drawerId, startCloseTimer]);
 
-  // Command drawer to close on mount and start motor timer
+  // Start closing the drawer on mount and arm the motor timer.
   useEffect(() => {
     hardwareAPI.closeDrawer(drawerId).catch(() => {});
     startCloseTimer();
@@ -176,25 +149,14 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     };
   }, [drawerId, startCloseTimer]);
 
-  // Camera start
+  // Attach the shared stream to our display video element.
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let stream: MediaStream | null = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-        });
-      } catch {
-        try { stream = await navigator.mediaDevices.getUserMedia({ video: true }); } catch { return; }
-      }
-      if (!cancelled && videoRef.current && stream) videoRef.current.srcObject = stream;
-      else if (stream) stream.getTracks().forEach(t => t.stop());
-    })();
-    return () => { cancelled = true; stopCamera(); setCameraReady(false); };
-  }, [stopCamera]);
+    if (camCtx?.stream && videoRef.current) {
+      videoRef.current.srcObject = camCtx.stream;
+    }
+  }, [camCtx?.stream]);
 
-  // Countdown — paused during alert and borrow-confirm
+  // Countdown — paused during borrow-confirm and alert.
   useEffect(() => {
     const t = setInterval(() => {
       setTimeLeft(prev => {
@@ -202,7 +164,6 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
         if (prev <= 1) {
           clearInterval(t);
           isRunningRef.current = false;
-          stopCamera();
           phaseRef.current = 'safe';
           setPhase('safe');
           return 0;
@@ -211,9 +172,9 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
       });
     }, 1000);
     return () => clearInterval(t);
-  }, [stopCamera]);
+  }, []);
 
-  // safe → call onComplete after brief display
+  // safe → call onComplete after brief display; camera stays alive (context owns it).
   useEffect(() => {
     if (phase === 'safe') {
       const t = setTimeout(onComplete, 2000);
@@ -221,177 +182,138 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     }
   }, [phase, onComplete]);
 
-  // Detection loop
+  // ── Detection state-machine driven by the shared context loop ──────────────
   useEffect(() => {
-    if (!cameraReady) return;
-    let active = true;
-    (async () => {
-      while (active && isRunningRef.current) {
-        const video = videoRef.current;
-        const canvas = captureRef.current;
-        if (!video || !canvas || video.readyState < 2) { await sleep(100); continue; }
-        const ctx = canvas.getContext('2d');
-        if (!ctx) break;
-        ctx.drawImage(video, 0, 0, CAPTURE_W, CAPTURE_H);
-        const frameData = canvas.toDataURL('image/jpeg', 0.75);
-        setLoading(true);
-        try {
-          const resp = await fetch(`${API_BASE_URL}/detection/detect`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: frameData }),
+    if (!cameraReady || !serverReady || !isRunningRef.current) return;
+
+    const dets       = latestDets;
+    const hasHand    = dets.some(d => d.class.toLowerCase() === 'main');
+    const toolClasses = dets
+      .filter(d => d.class.toLowerCase() !== 'main')
+      .map(d => d.class);
+
+    const cur = phaseRef.current;
+
+    // ── monitoring ────────────────────────────────────────────────────────
+    if (cur === 'monitoring') {
+      if (hasHand) {
+        clearCountRef.current = 0;
+        handCountRef.current += 1;
+        if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
+          handCountRef.current = 0;
+          missingCountRef.current = {};
+          motorWasRunningAtHandRef.current = motorRunningRef.current;
+          setDrawerWasMoving(motorRunningRef.current);
+          const confirmedTools = Object.keys(preHandToolCountRef.current)
+            .filter(cls => preHandToolCountRef.current[cls] >= TOOL_CONFIRM_FRAMES);
+          lastFrameBeforeHandRef.current = confirmedTools.length > 0 ? confirmedTools : [...toolClasses];
+          preHandToolCountRef.current = {};
+          if (motorRunningRef.current) {
+            hardwareAPI.stopMotors().catch(() => {});
+            motorStoppedByUsRef.current = true;
+            if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+            motorRunningRef.current = false;
+            bestPreHandSnapRef.current = [];
+            stabilizingFramesRef.current = STABILIZE_FRAMES;
+          }
+          phaseRef.current = 'hand-detected';
+          setPhase('hand-detected');
+        }
+      } else {
+        handCountRef.current = 0;
+        if (!motorRunningRef.current) {
+          toolClasses.forEach(cls => {
+            preHandToolCountRef.current[cls] = (preHandToolCountRef.current[cls] ?? 0) + 1;
           });
-          if (!resp.ok) { await sleep(300); continue; }
-          const result: DetectionResult = await resp.json();
-          if (!result.success) { await sleep(500); continue; }
-
-          if (result.annotated_image) setAnnotatedImage(result.annotated_image);
-          setServerReady(true);
-
-          const dets = result.detections ?? [];
-          const hasHand = dets.some(d => d.class.toLowerCase() === 'main');
-          const toolClasses = dets
-            .filter(d => d.class.toLowerCase() !== 'main')
-            .map(d => d.class);
-
-          const cur = phaseRef.current;
-
-          // ── monitoring ──────────────────────────────────────────────────
-          if (cur === 'monitoring') {
-            if (hasHand) {
-              clearCountRef.current = 0;
-              handCountRef.current += 1;
-              if (handCountRef.current >= HAND_CONFIRM_FRAMES) {
-                handCountRef.current = 0;
-                missingCountRef.current = {};
-                motorWasRunningAtHandRef.current = motorRunningRef.current;
-                setDrawerWasMoving(motorRunningRef.current);
-                // Use tools confirmed over multiple frames; fall back to current frame when motor was running
-                const confirmedTools = Object.keys(preHandToolCountRef.current)
-                  .filter(cls => preHandToolCountRef.current[cls] >= TOOL_CONFIRM_FRAMES);
-                lastFrameBeforeHandRef.current = confirmedTools.length > 0 ? confirmedTools : [...toolClasses];
-                preHandToolCountRef.current = {};
-                if (motorRunningRef.current) {
-                  hardwareAPI.stopMotors().catch(() => {});
-                  motorStoppedByUsRef.current = true;
-                  if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
-                  motorRunningRef.current = false;
-                  // Clear reference and start stabilization period to collect fresh frames
-                  // from the now-stationary drawer (before user grabs tools)
-                  bestPreHandSnapRef.current = [];
-                  stabilizingFramesRef.current = STABILIZE_FRAMES;
-                }
-                phaseRef.current = 'hand-detected';
-                setPhase('hand-detected');
-              }
-            } else {
-              handCountRef.current = 0;
-              if (!motorRunningRef.current) {
-                // Count how many frames each tool has been consistently seen (filters false positives)
-                toolClasses.forEach(cls => {
-                  preHandToolCountRef.current[cls] = (preHandToolCountRef.current[cls] ?? 0) + 1;
-                });
-                if (toolClasses.length >= bestPreHandSnapRef.current.length) {
-                  bestPreHandSnapRef.current = [...toolClasses];
-                }
-              }
-            }
+          if (toolClasses.length >= bestPreHandSnapRef.current.length) {
+            bestPreHandSnapRef.current = [...toolClasses];
           }
-
-          // ── hand-detected: wait for hand to leave ───────────────────────
-          else if (cur === 'hand-detected') {
-            // During stabilization: just skip frames until hand position stabilizes
-            // Don't update reference — we use lastFrameBeforeHandRef (frozen when hand was first detected)
-            if (stabilizingFramesRef.current > 0) {
-              stabilizingFramesRef.current--;
-            }
-            // After stabilization: compare frozen "before hand" frame with current detections
-            else if (!hasHand) {
-              clearCountRef.current += 1;
-              // Compare against the LAST FRAME RIGHT BEFORE hand was detected (most accurate)
-              lastFrameBeforeHandRef.current.forEach(cls => {
-                const present = toolClasses.some(c => c.toLowerCase() === cls.toLowerCase());
-                if (!present) {
-                  missingCountRef.current[cls] = (missingCountRef.current[cls] ?? 0) + 1;
-                }
-              });
-              if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
-                clearCountRef.current = 0;
-                const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2);
-                const stolen = lastFrameBeforeHandRef.current.filter(
-                  cls => (missingCountRef.current[cls] ?? 0) >= threshold
-                );
-                missingCountRef.current = {};
-                motorWasRunningAtHandRef.current = false;
-                setDrawerWasMoving(false);
-                lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
-                handCountRef.current = 0; // ← Reset hand detection counter
-                if (stolen.length > 0) {
-                  stolenRef.current = stolen;
-                  setStolenTools(stolen);
-                  phaseRef.current = 'borrow-confirm';
-                  setPhase('borrow-confirm');
-                } else {
-                  if (motorStoppedByUsRef.current) {
-                    hardwareAPI.closeDrawer(drawerId).catch(() => {});
-                    startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
-                    setTimeLeft(CLOSE_RESUME_SECONDS);
-                  }
-                  preHandToolCountRef.current = {};
-                  phaseRef.current = 'monitoring';
-                  setPhase('monitoring');
-                }
-              }
-            } else {
-              clearCountRef.current = 0;
-            }
-          }
-
-          // ── alert: wait for stolen tool(s) to come back ─────────────────
-          else if (cur === 'alert') {
-            const allBack = stolenRef.current.every(
-              cls => toolClasses.some(c => c.toLowerCase() === cls.toLowerCase())
-            );
-            if (allBack && !hasHand) {
-              clearCountRef.current += 1;
-              if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
-                clearCountRef.current = 0;
-                stolenRef.current = [];
-                setStolenTools([]);
-                bestPreHandSnapRef.current = [...toolClasses];
-                lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
-                missingCountRef.current = {};
-                handCountRef.current = 0; // ← Reset hand detection counter
-                if (motorStoppedByUsRef.current) {
-                  hardwareAPI.closeDrawer(drawerId).catch(() => {});
-                  startCloseTimer(); // ← This now also resets motorStoppedByUsRef.current
-                  setTimeLeft(CLOSE_RESUME_SECONDS);
-                }
-                preHandToolCountRef.current = {};
-                phaseRef.current = 'monitoring';
-                setPhase('monitoring');
-              }
-            } else {
-              clearCountRef.current = 0;
-            }
-          }
-
-        } catch { await sleep(500); }
-        finally { setLoading(false); }
+        }
       }
-    })();
-    return () => { active = false; };
-  }, [cameraReady, drawerId, startCloseTimer]);
+    }
 
-  // ── Handlers borrow-confirm ───────────────────────────────────────────────
+    // ── hand-detected: wait for hand to leave ─────────────────────────────
+    else if (cur === 'hand-detected') {
+      if (stabilizingFramesRef.current > 0) {
+        stabilizingFramesRef.current--;
+      } else if (!hasHand) {
+        clearCountRef.current += 1;
+        lastFrameBeforeHandRef.current.forEach(cls => {
+          const present = toolClasses.some(c => c.toLowerCase() === cls.toLowerCase());
+          if (!present) {
+            missingCountRef.current[cls] = (missingCountRef.current[cls] ?? 0) + 1;
+          }
+        });
+        if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
+          clearCountRef.current = 0;
+          const threshold = Math.ceil(CLEAR_CONFIRM_FRAMES / 2);
+          const stolen = lastFrameBeforeHandRef.current.filter(
+            cls => (missingCountRef.current[cls] ?? 0) >= threshold
+          );
+          missingCountRef.current = {};
+          motorWasRunningAtHandRef.current = false;
+          setDrawerWasMoving(false);
+          lastFrameBeforeHandRef.current = [];
+          handCountRef.current = 0;
+          if (stolen.length > 0) {
+            stolenRef.current = stolen;
+            setStolenTools(stolen);
+            phaseRef.current = 'borrow-confirm';
+            setPhase('borrow-confirm');
+          } else {
+            if (motorStoppedByUsRef.current) {
+              hardwareAPI.closeDrawer(drawerId).catch(() => {});
+              startCloseTimer();
+              setTimeLeft(CLOSE_RESUME_SECONDS);
+            }
+            preHandToolCountRef.current = {};
+            phaseRef.current = 'monitoring';
+            setPhase('monitoring');
+          }
+        }
+      } else {
+        clearCountRef.current = 0;
+      }
+    }
+
+    // ── alert: wait for stolen tool(s) to come back ───────────────────────
+    else if (cur === 'alert') {
+      const allBack = stolenRef.current.every(
+        cls => toolClasses.some(c => c.toLowerCase() === cls.toLowerCase())
+      );
+      if (allBack && !hasHand) {
+        clearCountRef.current += 1;
+        if (clearCountRef.current >= CLEAR_CONFIRM_FRAMES) {
+          clearCountRef.current = 0;
+          stolenRef.current = [];
+          setStolenTools([]);
+          bestPreHandSnapRef.current = [...toolClasses];
+          lastFrameBeforeHandRef.current = [];
+          missingCountRef.current = {};
+          handCountRef.current = 0;
+          if (motorStoppedByUsRef.current) {
+            hardwareAPI.closeDrawer(drawerId).catch(() => {});
+            startCloseTimer();
+            setTimeLeft(CLOSE_RESUME_SECONDS);
+          }
+          preHandToolCountRef.current = {};
+          phaseRef.current = 'monitoring';
+          setPhase('monitoring');
+        }
+      } else {
+        clearCountRef.current = 0;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestDets, cameraReady, serverReady, drawerId, startCloseTimer]);
+
+  // ── Borrow-confirm handlers ───────────────────────────────────────────────
 
   const handleConfirmBorrow = async () => {
-    // Clear the auto-borrow timer
     if (borrowAutoTimerRef.current) {
       clearTimeout(borrowAutoTimerRef.current);
       borrowAutoTimerRef.current = null;
     }
-
     setBorrowConfirmLoading(true);
     try {
       await onBorrowStolenToolsRef.current?.(stolenRef.current.map(displayName));
@@ -402,7 +324,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     }
     stolenRef.current = [];
     setStolenTools([]);
-    lastFrameBeforeHandRef.current = []; // ← Reset for next cycle
+    lastFrameBeforeHandRef.current = [];
     if (motorStoppedByUsRef.current) {
       hardwareAPI.closeDrawer(drawerId).catch(() => {});
       motorStoppedByUsRef.current = false;
@@ -415,7 +337,6 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   };
 
   const handleDeclineBorrow = () => {
-    // Clear the auto-borrow timer
     if (borrowAutoTimerRef.current) {
       clearTimeout(borrowAutoTimerRef.current);
       borrowAutoTimerRef.current = null;
@@ -561,9 +482,7 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
             <video ref={videoRef} autoPlay playsInline muted
               className="absolute inset-0 w-full h-full object-cover"
               style={{ opacity: cameraReady && !annotatedImage ? 1 : 0 }}
-              onCanPlay={() => setCameraReady(true)}
             />
-            <canvas ref={captureRef} className="hidden" width={CAPTURE_W} height={CAPTURE_H} />
             {annotatedImage && (
               <img src={`data:image/jpeg;base64,${annotatedImage}`} alt="YOLO"
                 className="absolute inset-0 w-full h-full object-cover" />
@@ -578,12 +497,6 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 z-10">
                 <Loader className="w-10 h-10 text-yellow-400 animate-spin mb-3" />
                 <p className="text-slate-300 text-sm">Chargement YOLO...</p>
-              </div>
-            )}
-            {loading && serverReady && (
-              <div className="absolute top-3 left-3 bg-blue-600/85 px-2 py-1 rounded-lg flex items-center gap-2 z-20">
-                <Loader className="w-3 h-3 text-white animate-spin" />
-                <span className="text-white text-xs font-medium">YOLO...</span>
               </div>
             )}
             {phase === 'monitoring' && (

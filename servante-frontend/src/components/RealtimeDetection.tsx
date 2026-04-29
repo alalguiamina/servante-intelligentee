@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, AlertCircle, Loader, CheckCircle, AlertTriangle, Check, X, RefreshCw } from 'lucide-react';
 import { API_BASE_URL, hardwareAPI } from '../services/api';
+import { useDrawerCamera } from './DrawerCameraContext';
 
 interface RealtimeDetectionProps {
   toolName: string;
@@ -132,9 +133,15 @@ function phase2Status(
   drawerTools: DrawerTool[] = [],
 ): DetectionStatus {
   if (action === 'borrow') {
-    const taken      = snap1Names.filter(s => !snap2Names.some(s2 => normalize(s2) === normalize(s)));
-    const targetTaken = taken.some(s => normalize(s) === normalize(toolName));
-    const wrongTaken  = taken.filter(s => normalize(s) !== normalize(toolName));
+    // Get expected tools from database (those that should be available in drawer)
+    const expectedTools = drawerTools
+      .filter(t => t.availableQuantity > 0)
+      .map(t => t.name);
+    
+    // Compare: expected - snap2 = tools taken by user (including the target)
+    const taken      = expectedTools.filter(e => !snap2Names.some(s2 => normalize(s2) === normalize(e)));
+    const targetTaken = taken.some(t => normalize(t) === normalize(toolName));
+    const wrongTaken  = taken.filter(t => normalize(t) !== normalize(toolName));
 
     if (wrongTaken.length > 0 && targetTaken)
       return { code: 'E3', ok: false, message: `Plusieurs outils pris simultanément : ${taken.join(', ')}.`, canRetry: true, extraToolNames: wrongTaken };
@@ -144,16 +151,23 @@ function phase2Status(
       return { code: 'E2', ok: false, message: `"${toolName}" n'a pas été retiré du tiroir.`, canRetry: false };
     return { code: 'C1', ok: true, message: `"${toolName}" a bien été pris. Emprunt confirmé.` };
   } else {
+    // For return: tools that reappeared (in snap2 but not snap1) should include the target
     const returned       = snap2Names.filter(s => !snap1Names.some(s1 => normalize(s1) === normalize(s)));
     const targetReturned = returned.some(s => normalize(s) === normalize(toolName));
     const wrongReturned  = returned.filter(s => normalize(s) !== normalize(toolName));
 
+    // Tools that disappeared during return (not in snap2) but are in database and borrowed = stolen during return
+    const expectedBorrowedTools = drawerTools
+      .filter(t => t.availableQuantity === 0) // currently borrowed
+      .map(t => t.name);
+    
     const stolenDuringReturn = snap1Names.filter(s => {
-      if (snap2Names.some(s2 => normalize(s2) === normalize(s))) return false;
-      if (normalize(s) === normalize(toolName)) return false;
-      const dbTool = drawerTools.find(t => normalize(t.name) === normalize(s));
-      return !!dbTool && dbTool.availableQuantity === 0;
+      if (snap2Names.some(s2 => normalize(s2) === normalize(s))) return false; // tool is still there
+      if (normalize(s) === normalize(toolName)) return false; // skip the target tool
+      // Check if this tool is in database and marked as borrowed (expected to be gone normally)
+      return expectedBorrowedTools.some(b => normalize(b) === normalize(s));
     });
+    
     if (wrongReturned.length > 0 && !targetReturned)
       return { code: 'E4', ok: false, message: `Mauvais outil retourné : "${wrongReturned[0]}" au lieu de "${toolName}".`, canRetry: true };
     if (!targetReturned)
@@ -188,6 +202,11 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const initialPhase: Phase = isHandDetectionPhase ? 'hand-detection' : 'detecting';
   const videoRef   = useRef<HTMLVideoElement>(null);
   const captureRef = useRef<HTMLCanvasElement>(null);
+
+  const camCtx = useDrawerCamera();
+  // Stable ref to context stream so stopCamera doesn't need it as a reactive dep.
+  const camCtxStreamRef = useRef<MediaStream | null>(null);
+  useEffect(() => { camCtxStreamRef.current = camCtx?.stream ?? null; });
 
   const isRunningRef         = useRef(true);
   const lastDetectionsRef    = useRef<Detection[]>([]);
@@ -245,6 +264,13 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const serverReadyRef = useRef(false);
   useEffect(() => { serverReadyRef.current = serverReady; }, [serverReady]);
 
+  // Tell the context background loop to yield while we run our own YOLO loop.
+  useEffect(() => {
+    if (!camCtx) return;
+    camCtx.acquireDetection();
+    return () => { camCtx.releaseDetection(); };
+  }, [camCtx]);
+
   // ── Initialize with snapshot from DrawerOpeningGuard (if provided) ──────────
   useEffect(() => {
     if (initialSnapshot && initialSnapshot.length > 0) {
@@ -269,6 +295,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   // ── Stop camera ────────────────────────────────────────────────────────────
   const stopCamera = useCallback(() => {
+    // Never stop the shared context stream — the provider owns its lifecycle.
+    if (camCtxStreamRef.current) return;
     if (videoRef.current?.srcObject) {
       (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
       videoRef.current.srcObject = null;
@@ -412,6 +440,12 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
 
   // ── Start camera (rear on mobile, any camera on desktop) ─────────────────
   useEffect(() => {
+    // If inside DrawerCameraProvider, reuse the already-running stream — no restart.
+    if (camCtx?.stream) {
+      if (videoRef.current) videoRef.current.srcObject = camCtx.stream;
+      return () => { setCameraReady(false); };
+    }
+    // Fallback: start our own stream when used outside the provider.
     let cancelled = false;
     const start = async () => {
       let stream: MediaStream | null = null;
@@ -442,7 +476,18 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
       stopCamera();
       setCameraReady(false);
     };
-  }, [stopCamera, cameraRestartKey]);
+  }, [stopCamera, cameraRestartKey, camCtx?.stream]);
+
+  // ── Ensure stream is attached to video element on phase transitions ──────────
+  // When transitioning between phases, a new video element may be created in the DOM.
+  // This effect ensures the stream stays connected regardless of phase changes.
+  useEffect(() => {
+    if (camCtx?.stream && videoRef.current) {
+      if (videoRef.current.srcObject !== camCtx.stream) {
+        videoRef.current.srcObject = camCtx.stream;
+      }
+    }
+  }, [phase, camCtx?.stream]); // Re-run when phase changes to ensure stream is attached to new video element
 
   // ── Continuous detection loop ──────────────────────────────────────────────
   useEffect(() => {
@@ -1201,14 +1246,27 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
             {' '}— Outil : <span className="font-semibold text-blue-700">{toolName}</span>
           </p>
 
-          {/* Live camera feed */}
+          {/* Live camera feed with annotated overlay */}
           <div className="relative bg-black rounded-2xl overflow-hidden border-4 border-blue-200 shadow-lg mb-4" style={{ aspectRatio: '16/9' }}>
             <video ref={videoRef} autoPlay playsInline muted
               className="absolute inset-0 w-full h-full object-cover"
               style={{ opacity: cameraReady ? 1 : 0 }}
+              onCanPlay={() => {
+                // Ensure cameraReady stays true when video element starts playing
+                // This handles the case where a new video element mounts during phase transitions
+              }}
             />
+            {/* Annotated image overlay — shows YOLO detections with bounding boxes */}
+            {annotatedImage && (
+              <img 
+                src={`data:image/jpeg;base64,${annotatedImage}`}
+                alt="Détections YOLO" 
+                className="absolute inset-0 w-full h-full object-cover"
+                style={{ opacity: cameraReady && !annotatedImage ? 0 : 1 }}
+              />
+            )}
             <canvas ref={captureRef} className="hidden" width={CAPTURE_W} height={CAPTURE_H} />
-            {!cameraReady && (
+            {!cameraReady && !annotatedImage && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-10">
                 <Camera className="w-10 h-10 text-slate-500 mb-3" />
                 <p className="text-slate-400 text-sm">Caméra...</p>
