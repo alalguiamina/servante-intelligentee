@@ -214,6 +214,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   const bestSnapshot1Ref     = useRef<Detection[]>([]); // best frame during phase 1 (most tools)
   const bestSnapshot2Ref     = useRef<Detection[]>([]); // fallback: best frame during phase 2
   const snapshot2Ref         = useRef<Detection[]>([]);
+  const drawerToolsRef       = useRef<DrawerTool[]>([]); // mirror of drawerTools for use inside the loop
   const toolVoteMapRef       = useRef<Record<string, number>>({}); // Phase 2: per-tool detection count
   const phase2FrameCountRef  = useRef(0);                          // Phase 2: total frames counted
   const timerPausedRef       = useRef(false);
@@ -257,6 +258,7 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
   useEffect(() => { lastDetectionsRef.current = detections; }, [detections]);
   useEffect(() => { cancelPendingToolRef.current = cancelPendingTool; }, [cancelPendingTool]);
   useEffect(() => { actionRef.current = action; }, [action]);
+  useEffect(() => { drawerToolsRef.current = drawerTools; }, [drawerTools]);
   useEffect(() => {
     phaseRef.current = phase;
     timerPausedRef.current = phase === 'hand-detected' || phase === 'alert';
@@ -516,7 +518,12 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
               if (result.detections) {
                 // Strip hand detections — "main" is never a borrowable tool
                 const hasHand = result.detections.some(d => d.class.toLowerCase() === 'main');
-                const toolDets = result.detections.filter(d => d.class.toLowerCase() !== 'main');
+                const allToolDets = result.detections.filter(d => d.class.toLowerCase() !== 'main');
+                // Ignore tools that belong to a different drawer
+                const drawerNames = drawerToolsRef.current.map(t => t.name.toLowerCase());
+                const toolDets = drawerNames.length > 0
+                  ? allToolDets.filter(d => drawerNames.includes(getDisplayName(d.class).toLowerCase()))
+                  : allToolDets;
                 const toolNames = toDisplayNames(toolDets);
                 const currentPhase = phaseRef.current;
                 // Update ref directly (no React render delay) so onTimerEnd always gets latest
@@ -1065,7 +1072,8 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
               {/* PHASE 2: action result live */}
               {inActionPhase && (() => {
                 if (action === 'borrow') {
-                  const taken = snap1Names.filter(s => !detectedNames.some(d => normalize(d) === normalize(s)));
+                  const expectedTools = drawerTools.filter(t => t.availableQuantity > 0).map(t => t.name);
+                  const taken = expectedTools.filter(e => !detectedNames.some(d => normalize(d) === normalize(e)));
                   const targetTaken = taken.some(s => normalize(s) === normalize(toolName));
                   if (targetTaken) return (
                     <div className="rounded-xl p-4 border-2 border-green-400 bg-green-50 mb-3 flex items-center gap-3">
@@ -1136,6 +1144,22 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
               </div>
             </div>
           )}
+
+          {/* Manual close button — always available as emergency fallback */}
+          {drawerId && (
+            <button
+              onClick={() => {
+                isRunningRef.current = false;
+                stopCamera();
+                hardwareAPI.closeDrawer(drawerId as '1' | '2' | '3' | '4').catch(() => {});
+                onDetectionFailure('Tiroir fermé manuellement.');
+              }}
+              className="mt-3 w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-sm transition-colors flex items-center justify-center gap-2 border border-slate-300"
+            >
+              <X className="w-4 h-4 text-slate-500" />
+              Fermer le tiroir manuellement
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1183,10 +1207,9 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
   onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel, onExtraToolsDetected, onBorrowStolenTools,
 }) => {
   const snap1Names = toDisplayNames(snapshot1);
-  const snap2Names = toDisplayNames(snapshot2);
+  const liveNames  = toDisplayNames(detections); // live camera — always matches annotated image
 
-  const p1 = phase1Conformity(snap1Names, drawerTools, toolName, action);
-  const p2 = phase2Status(snap1Names, snap2Names, toolName, action, drawerTools);
+  const p2 = phase2Status(snap1Names, liveNames, toolName, action, drawerTools);
   const cfg = statusConfig[p2.code];
   const warningSentRef = React.useRef(false);
 
@@ -1285,37 +1308,6 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
             <div className="flex justify-center py-10"><Loader className="w-8 h-8 animate-spin text-blue-500" /></div>
           ) : (
             <>
-              {/* ── Phase 1 conformity ── */}
-              <div className={`rounded-xl px-4 py-3 border-2 mb-3 ${p1.ok ? 'bg-green-50 border-green-300' : 'bg-orange-50 border-orange-300'}`}>
-                <div className="flex items-start gap-3">
-                  {p1.ok
-                    ? <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                    : <AlertTriangle className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" />}
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-0.5">
-                      Phase 1 — État initial du tiroir (avant action)
-                    </p>
-                    {p1.ok ? (
-                      <p className="text-sm font-semibold text-green-800">
-                        Conforme à la base de données — {p1.expected.length}/{p1.expected.length} outil{p1.expected.length > 1 ? 's' : ''} présent{p1.expected.length > 1 ? 's' : ''}
-                      </p>
-                    ) : (
-                      <div>
-                        <p className="text-sm font-semibold text-orange-800">
-                          Non conforme — {p1.expected.length - p1.missing.length}/{p1.expected.length} outils détectés
-                        </p>
-                        {p1.missing.length > 0 && (
-                          <p className="text-xs text-orange-700 mt-0.5">Manquants : {p1.missing.join(', ')}</p>
-                        )}
-                        {p1.unexpected.length > 0 && (
-                          <p className="text-xs text-orange-700 mt-0.5">Inattendus : {p1.unexpected.join(', ')}</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
               {/* ── Phase 2 action result ── */}
               <div className={`rounded-xl px-4 py-3 border-2 mb-5 ${cfg.bg} ${cfg.border}`}>
                 <div className="flex items-start gap-3">
@@ -1338,8 +1330,8 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
                 </div>
               )}
 
-              {/* ── 3-column comparison table ── */}
-              <div className="grid grid-cols-3 gap-3 mb-5">
+              {/* ── 2-column comparison table: DB vs live camera ── */}
+              <div className="grid grid-cols-2 gap-3 mb-5">
 
                 {/* DB */}
                 <div className="bg-slate-50 rounded-2xl p-4 border-2 border-slate-200">
@@ -1364,67 +1356,50 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
                       </ul>}
                 </div>
 
-                {/* Snapshot 1 — Before */}
-                <div className="bg-slate-50 rounded-2xl p-4 border-2 border-blue-200">
-                  <h3 className="font-bold text-slate-700 mb-3 text-sm flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-blue-400 inline-block"></span>
-                    Avant (Phase 1)
-                  </h3>
-                  {snap1Names.length === 0
-                    ? <p className="text-slate-400 text-xs italic">Aucune détection</p>
-                    : <ul className="space-y-1.5">
-                        {drawerTools.filter(t => t.availableQuantity > 0).map(t => {
-                          const present = toolPresenceInSnap(t.name, snap1Names);
-                          return (
-                            <li key={t.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium
-                              ${present ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-red-50 border border-red-200 text-red-700'}`}>
-                              {present
-                                ? <CheckCircle className="w-3.5 h-3.5 text-green-600 shrink-0" />
-                                : <X className="w-3.5 h-3.5 text-red-500 shrink-0" />}
-                              <span className="truncate">{t.name}</span>
-                            </li>
-                          );
-                        })}
-                      </ul>}
-                </div>
-
-                {/* Snapshot 2 — After */}
+                {/* Live Phase 2 — real-time camera detections */}
                 <div className="bg-slate-50 rounded-2xl p-4 border-2 border-green-200">
                   <h3 className="font-bold text-slate-700 mb-3 text-sm flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block animate-pulse"></span>
-                    Après (Phase 2)
+                    Caméra (temps réel)
                   </h3>
-                  {drawerTools.filter(t => t.availableQuantity > 0).length === 0
-                    ? <p className="text-slate-400 text-xs italic">Aucun outil attendu</p>
-                    : <ul className="space-y-1.5">
-                        {drawerTools.filter(t => t.availableQuantity > 0).map(t => {
-                          const wasInP1  = toolPresenceInSnap(t.name, snap1Names);
-                          const isInP2   = toolPresenceInSnap(t.name, snap2Names);
-                          const changed  = wasInP1 !== isInP2;
-                          const isTarget = normalize(t.name) === normalize(toolName);
+                  {(() => {
+                    // Show available tools + the return target (which has availableQty=0 since borrowed)
+                    const toolsToShow = drawerTools.filter(t =>
+                      t.availableQuantity > 0 || normalize(t.name) === normalize(toolName)
+                    );
+                    if (toolsToShow.length === 0)
+                      return <p className="text-slate-400 text-xs italic">Aucun outil attendu</p>;
+                    return (
+                      <ul className="space-y-1.5">
+                        {toolsToShow.map(t => {
+                          const isInLive  = toolPresenceInSnap(t.name, liveNames);
+                          const isTarget  = normalize(t.name) === normalize(toolName);
+                          const isTaken    = isTarget && action === 'borrow' && !isInLive;
+                          const isReturned = isTarget && action === 'return' && isInLive;
                           return (
                             <li key={t.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium
-                              ${isInP2
-                                ? changed && isTarget && action === 'return'
-                                  ? 'bg-green-100 border-2 border-green-400 text-green-900 font-bold'
-                                  : 'bg-green-50 border border-green-200 text-green-800'
-                                : changed && isTarget && action === 'borrow'
-                                  ? 'bg-blue-100 border-2 border-blue-400 text-blue-900 font-bold'
-                                  : 'bg-red-50 border border-red-200 text-red-700'}`}>
-                              {isInP2
+                              ${isReturned
+                                ? 'bg-green-100 border-2 border-green-400 text-green-900 font-bold'
+                                : isTaken
+                                ? 'bg-blue-100 border-2 border-blue-400 text-blue-900 font-bold'
+                                : isInLive
+                                ? 'bg-green-50 border border-green-200 text-green-800'
+                                : 'bg-red-50 border border-red-200 text-red-700'}`}>
+                              {isInLive
                                 ? <CheckCircle className="w-3.5 h-3.5 text-green-600 shrink-0" />
                                 : <X className="w-3.5 h-3.5 text-red-500 shrink-0" />}
                               <span className="truncate">{t.name}</span>
-                              {changed && isTarget && (
-                                <span className="ml-auto shrink-0 text-xs px-1.5 rounded font-bold
-                                  bg-blue-200 text-blue-800">
+                              {(isTaken || isReturned) && (
+                                <span className="ml-auto shrink-0 text-xs px-1.5 rounded font-bold bg-blue-200 text-blue-800">
                                   {action === 'borrow' ? 'pris' : 'retourné'}
                                 </span>
                               )}
                             </li>
                           );
                         })}
-                      </ul>}
+                      </ul>
+                    );
+                  })()}
                 </div>
               </div>
 

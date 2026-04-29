@@ -1,7 +1,9 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Camera, AlertTriangle, CheckCircle, Loader, ShieldAlert, ShieldCheck, Package } from 'lucide-react';
-import { hardwareAPI } from '../services/api';
+import { Camera, AlertTriangle, CheckCircle, Loader, ShieldAlert, ShieldCheck, Package, XCircle } from 'lucide-react';
+import { hardwareAPI, API_BASE_URL } from '../services/api';
 import { useDrawerCamera } from './DrawerCameraContext';
+
+interface DrawerTool { id: string; name: string; drawer: string; }
 
 interface DrawerClosingGuardProps {
   drawerId: '1' | '2' | '3' | '4';
@@ -62,6 +64,9 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   const timerPausedRef           = useRef(false);
   const borrowAutoTimerRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onBorrowStolenToolsRef   = useRef(onBorrowStolenTools);
+
+  // Drawer-specific tool list — used to filter YOLO detections
+  const drawerToolsRef = useRef<DrawerTool[]>([]);
 
   const motorRunningRef          = useRef(true);
   const motorStoppedByUsRef      = useRef(false);
@@ -139,6 +144,18 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
     };
   }, [phase, drawerId, startCloseTimer]);
 
+  // Fetch drawer-specific tools so we can filter detections to this drawer only.
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/tools`)
+      .then(r => r.json())
+      .then(data => {
+        drawerToolsRef.current = (data.data || []).filter(
+          (t: DrawerTool) => String(t.drawer) === String(drawerId)
+        );
+      })
+      .catch(() => {});
+  }, [drawerId]);
+
   // Start closing the drawer on mount and arm the motor timer.
   useEffect(() => {
     hardwareAPI.closeDrawer(drawerId).catch(() => {});
@@ -186,11 +203,15 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
   useEffect(() => {
     if (!cameraReady || !serverReady || !isRunningRef.current) return;
 
-    const dets       = latestDets;
-    const hasHand    = dets.some(d => d.class.toLowerCase() === 'main');
-    const toolClasses = dets
-      .filter(d => d.class.toLowerCase() !== 'main')
-      .map(d => d.class);
+    const dets        = latestDets;
+    const hasHand     = dets.some(d => d.class.toLowerCase() === 'main');
+    const allToolDets = dets.filter(d => d.class.toLowerCase() !== 'main');
+    // Keep only tools that belong to this drawer (ignore tools from other drawers)
+    const drawerNames = drawerToolsRef.current.map(t => t.name.toLowerCase());
+    const toolClasses = (drawerNames.length > 0
+      ? allToolDets.filter(d => drawerNames.includes((DISPLAY[d.class] ?? d.class).toLowerCase()))
+      : allToolDets
+    ).map(d => d.class);
 
     const cur = phaseRef.current;
 
@@ -524,6 +545,21 @@ const DrawerClosingGuard: React.FC<DrawerClosingGuardProps> = ({ drawerId, onCom
               Surveillance active — aucune main détectée dans le tiroir
             </p>
           </div>
+        )}
+
+        {/* Manual close button — forces immediate drawer close as emergency fallback */}
+        {phase !== 'safe' && (
+          <button
+            onClick={() => {
+              isRunningRef.current = false;
+              hardwareAPI.closeDrawer(drawerId).catch(() => {});
+              onComplete();
+            }}
+            className="mt-4 w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-sm transition-colors flex items-center justify-center gap-2 border border-slate-300"
+          >
+            <XCircle className="w-4 h-4 text-slate-500" />
+            Fermer le tiroir manuellement
+          </button>
         )}
       </div>
     </div>

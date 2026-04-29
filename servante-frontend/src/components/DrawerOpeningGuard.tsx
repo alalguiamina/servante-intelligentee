@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { Camera, AlertTriangle, CheckCircle, Loader, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Camera, AlertTriangle, CheckCircle, Loader, ShieldAlert, ShieldCheck, XCircle } from 'lucide-react';
+import { hardwareAPI, API_BASE_URL } from '../services/api';
 import { useDrawerCamera } from './DrawerCameraContext';
 
 interface Detection {
@@ -8,9 +9,12 @@ interface Detection {
   x: number; y: number; w: number; h: number;
 }
 
+interface DrawerTool { id: string; name: string; drawer: string; }
+
 interface DrawerOpeningGuardProps {
   drawerId: '1' | '2' | '3' | '4';
   onComplete: (snapshot: Detection[]) => void;
+  onCancel?: () => void;
 }
 
 const HAND_CONFIRM_FRAMES  = 2;
@@ -40,7 +44,7 @@ const DISPLAY: Record<string, string> = {
 };
 const displayName = (cls: string) => DISPLAY[cls] ?? cls;
 
-const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onComplete }) => {
+const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onComplete, onCancel }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const camCtx = useDrawerCamera();
@@ -50,6 +54,9 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
   const serverReady    = camCtx?.serverReady       ?? false;
   const annotatedImage = camCtx?.annotatedImage    ?? null;
   const latestDets     = camCtx?.latestDetections  ?? [];
+
+  // Drawer-specific tool list — used to filter YOLO detections
+  const drawerToolsRef = useRef<DrawerTool[]>([]);
 
   const isRunningRef        = useRef(true);
   const phaseRef            = useRef<GuardPhase>('monitoring');
@@ -70,6 +77,18 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
     phaseRef.current     = phase;
     timerPausedRef.current = phase === 'alert';
   }, [phase]);
+
+  // Fetch drawer-specific tools so we can filter detections to this drawer only.
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/tools`)
+      .then(r => r.json())
+      .then(data => {
+        drawerToolsRef.current = (data.data || []).filter(
+          (t: DrawerTool) => String(t.drawer) === String(drawerId)
+        );
+      })
+      .catch(() => {});
+  }, [drawerId]);
 
   // Attach the shared stream to our display video element — no getUserMedia call.
   useEffect(() => {
@@ -110,12 +129,15 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
   useEffect(() => {
     if (!cameraReady || !serverReady || !isRunningRef.current) return;
 
-    const dets       = latestDets;
-    const hasHand    = dets.some(d => d.class.toLowerCase() === 'main');
-    const toolClasses = dets
-      .filter(d => d.class.toLowerCase() !== 'main')
-      .map(d => d.class);
-    const toolDets = dets.filter(d => d.class.toLowerCase() !== 'main');
+    const dets    = latestDets;
+    const hasHand = dets.some(d => d.class.toLowerCase() === 'main');
+    const allToolDets = dets.filter(d => d.class.toLowerCase() !== 'main');
+    // Keep only tools that belong to this drawer (ignore tools from other drawers)
+    const drawerNames = drawerToolsRef.current.map(t => t.name.toLowerCase());
+    const toolDets = drawerNames.length > 0
+      ? allToolDets.filter(d => drawerNames.includes((DISPLAY[d.class] ?? d.class).toLowerCase()))
+      : allToolDets;
+    const toolClasses = toolDets.map(d => d.class);
 
     const cur = phaseRef.current;
 
@@ -322,6 +344,21 @@ const DrawerOpeningGuard: React.FC<DrawerOpeningGuardProps> = ({ drawerId, onCom
               Surveillance active — aucune main détectée dans le tiroir
             </p>
           </div>
+        )}
+
+        {/* Manual close button — always visible as emergency fallback */}
+        {phase !== 'safe' && (
+          <button
+            onClick={() => {
+              isRunningRef.current = false;
+              hardwareAPI.closeDrawer(drawerId).catch(() => {});
+              onCancel?.();
+            }}
+            className="mt-4 w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-sm transition-colors flex items-center justify-center gap-2 border border-slate-300"
+          >
+            <XCircle className="w-4 h-4 text-slate-500" />
+            Fermer le tiroir manuellement
+          </button>
         )}
       </div>
     </div>
