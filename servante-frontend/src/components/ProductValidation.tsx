@@ -14,6 +14,8 @@ interface ProductValidationProps {
   onBorrowAlternative?: (wrongToolName: string) => void;
   onExtraToolsDetected?: (extraToolNames: string[]) => void;
   onBorrowStolenTools?: (toolNames: string[]) => Promise<void>;
+  onBorrowAll?: (toolNames: string[]) => Promise<void>;
+  onBorrowedToolsFoundInDrawer?: (toolNames: string[]) => void;
   onSkip?: () => void;
 }
 
@@ -30,6 +32,8 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
   onBorrowAlternative,
   onExtraToolsDetected,
   onBorrowStolenTools,
+  onBorrowAll,
+  onBorrowedToolsFoundInDrawer,
 }) => {
   return (
     <RealtimeDetection
@@ -45,6 +49,8 @@ const ProductValidation: React.FC<ProductValidationProps> = ({
       onBorrowAlternative={onBorrowAlternative}
       onExtraToolsDetected={onExtraToolsDetected}
       onBorrowStolenTools={onBorrowStolenTools}
+      onBorrowAll={onBorrowAll}
+      onBorrowedToolsFoundInDrawer={onBorrowedToolsFoundInDrawer}
     />
   );
 };

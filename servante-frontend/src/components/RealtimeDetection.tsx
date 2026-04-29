@@ -16,6 +16,10 @@ interface RealtimeDetectionProps {
   onBorrowAlternative?: (wrongToolName: string) => void;
   onExtraToolsDetected?: (extraToolNames: string[]) => void;
   onBorrowStolenTools?: (toolNames: string[]) => Promise<void>;
+  /** Called when ALL detected taken tools should be borrowed at once (E3 case) */
+  onBorrowAll?: (toolNames: string[]) => Promise<void>;
+  /** Called at Phase-1 snapshot with names of borrowed tools physically detected in the drawer */
+  onBorrowedToolsFoundInDrawer?: (toolNames: string[]) => void;
 }
 
 interface Detection {
@@ -183,8 +187,11 @@ const CAPTURE_W = 640;
 const CAPTURE_H = 360;
 
 const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
-  toolName, drawerId, action = 'borrow', isRetry = false, initialSnapshot, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative, onExtraToolsDetected, onBorrowStolenTools,
+  toolName, drawerId, action = 'borrow', isRetry = false, initialSnapshot, onDetectionSuccess, onDetectionFailure, onRetry, onBorrowAlternative, onExtraToolsDetected, onBorrowStolenTools, onBorrowAll, onBorrowedToolsFoundInDrawer,
 }) => {
+  // Stable ref so the Phase-1 effect can call it without being in its dependency array
+  const onBorrowedFoundRef = useRef(onBorrowedToolsFoundInDrawer);
+  useEffect(() => { onBorrowedFoundRef.current = onBorrowedToolsFoundInDrawer; });
   // Shorter timer only for borrow retries (quick re-pick); returns always need full time
   const drawerTravelSeconds = Math.max(1, DRAWER_OPEN_TRAVEL_SECONDS);
 
@@ -383,6 +390,15 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         const snap1Names = toDisplayNames(best);
         const p1 = phase1Conformity(snap1Names, drawerTools, toolName, action);
         setPhase1Result(p1); // kept for display, never blocks
+
+        // Detect borrowed tools that are physically present in the drawer.
+        // These were returned without going through the system; auto-return them when the drawer closes.
+        const borrowedButPresent = drawerTools.filter(t =>
+          t.availableQuantity === 0 &&
+          snap1Names.some(n => normalize(n) === normalize(t.name)) &&
+          (action !== 'return' || normalize(t.name) !== normalize(toolName))
+        ).map(t => t.name);
+        if (borrowedButPresent.length > 0) onBorrowedFoundRef.current?.(borrowedButPresent);
       }
     }
   }, [timeRemaining, drawerTools, toolName, action, phase, actionStartAt]);
@@ -818,6 +834,12 @@ const RealtimeDetection: React.FC<RealtimeDetectionProps> = ({
         onReturnAndCancel={handleReturnAndCancel}
         onExtraToolsDetected={onExtraToolsDetected}
         onBorrowStolenTools={onBorrowStolenTools}
+        onBorrowAll={onBorrowAll ? async (toolNames) => {
+          isRunningRef.current = false;
+          stopCamera();
+          setPhase('confirming');
+          await onBorrowAll(toolNames);
+        } : undefined}
       />
     );
   }
@@ -1189,6 +1211,7 @@ interface ComparisonProps {
   onReturnAndCancel?: (wrongToolName: string) => void;
   onExtraToolsDetected?: (extraToolNames: string[]) => void;
   onBorrowStolenTools?: (toolNames: string[]) => Promise<void>;
+  onBorrowAll?: (toolNames: string[]) => Promise<void>;
 }
 
 const statusConfig: Record<string, { bg: string; border: string; icon: React.ReactNode; label: string }> = {
@@ -1204,8 +1227,9 @@ const statusConfig: Record<string, { bg: string; border: string; icon: React.Rea
 const ComparisonScreen: React.FC<ComparisonProps> = ({
   drawerId, toolName, action, drawerTools, loadingDrawer,
   snapshot1, snapshot2, annotatedImage, videoRef, captureRef, cameraReady, detections,
-  onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel, onExtraToolsDetected, onBorrowStolenTools,
+  onConfirm, onCancel, onRetry, onBorrowAlternative, onReturnAndCancel, onExtraToolsDetected, onBorrowStolenTools, onBorrowAll,
 }) => {
+  const [isBorrowingAll, setIsBorrowingAll] = React.useState(false);
   const snap1Names = toDisplayNames(snapshot1);
   const liveNames  = toDisplayNames(detections); // live camera — always matches annotated image
 
@@ -1499,6 +1523,37 @@ const ComparisonScreen: React.FC<ComparisonProps> = ({
                   <button onClick={() => onReturnAndCancel?.(p2.wrongToolName)}
                     className="w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition-colors flex items-center justify-center gap-2">
                     <X className="w-4 h-4" /> Annuler l'emprunt (remettre l'outil)
+                  </button>
+                </div>
+              ) : p2.code === 'E3' && onBorrowAll ? (
+                /* ── E3: plusieurs outils pris → option d'emprunter tout ── */
+                <div className="space-y-3">
+                  <p className="text-center text-sm font-semibold text-slate-700 mb-1">
+                    Plusieurs outils retirés — que souhaitez-vous faire ?
+                  </p>
+                  {/* Option 1 — Emprunter tous les outils détectés */}
+                  <button
+                    onClick={async () => {
+                      setIsBorrowingAll(true);
+                      try { await onBorrowAll([toolName, ...p2.extraToolNames]); }
+                      finally { setIsBorrowingAll(false); }
+                    }}
+                    disabled={isBorrowingAll}
+                    className="w-full py-4 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold transition-colors flex items-center justify-center gap-2 shadow disabled:opacity-50"
+                  >
+                    {isBorrowingAll ? <Loader className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
+                    Emprunter tout ({[toolName, ...p2.extraToolNames].length} outils)
+                  </button>
+                  {/* Option 2 — Remettre les extras et réessayer */}
+                  <button onClick={onRetry} disabled={isBorrowingAll}
+                    className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold transition-colors flex items-center justify-center gap-2 shadow disabled:opacity-50">
+                    <RefreshCw className="w-5 h-5" />
+                    Remettre les outils en trop et réessayer
+                  </button>
+                  {/* Annuler */}
+                  <button onClick={onCancel} disabled={isBorrowingAll}
+                    className="w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-50">
+                    <X className="w-4 h-4" /> Annuler l'emprunt
                   </button>
                 </div>
               ) : (
