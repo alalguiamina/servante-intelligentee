@@ -4814,9 +4814,11 @@ export default function App() {
                 showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
               }
             }
+            await autoReturnBorrowedTools(detectedBorrowedInDrawer);
           } catch {
             showToast('❌ Erreur réseau -- veuillez vérifier votre connexion', 'error', 4000);
           } finally {
+            setDetectedBorrowedInDrawer([]);
             resetValidation();
             if (dId && ['1','2','3','4'].includes(dId)) {
               setGuardDrawerId(dId);
@@ -4831,6 +4833,8 @@ export default function App() {
         onValidationFailure={async (reason) => {
           const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           showToast(`❌ ${reason}`, 'error', 3000);
+          await autoReturnBorrowedTools(detectedBorrowedInDrawer);
+          setDetectedBorrowedInDrawer([]);
           resetValidation();
           if (dId && ['1','2','3','4'].includes(dId)) {
             setGuardDrawerId(dId);
@@ -4860,9 +4864,11 @@ export default function App() {
                 showToast(`❌ ${result.message || t('borrowError')}`, 'error', 3000);
               }
             }
+            await autoReturnBorrowedTools(detectedBorrowedInDrawer);
           } catch {
             showToast('❌ Erreur réseau -- veuillez vérifier votre connexion', 'error', 4000);
           } finally {
+            setDetectedBorrowedInDrawer([]);
             resetValidation();
             if (dId && ['1','2','3','4'].includes(dId)) {
               setGuardDrawerId(dId);
@@ -4888,6 +4894,38 @@ export default function App() {
             console.warn('Erreur envoi avertissement outils supplementaires:', error);
           }
         }}
+        onBorrowAll={async (toolNames: string[]) => {
+          const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
+          const norm = (s: string) => s.toLowerCase().trim()
+            .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/-/g, ' ');
+          let count = 0;
+          for (const name of toolNames) {
+            const tool = tools.find(t => norm(t.name) === norm(name));
+            if (tool && tool.availableQuantity > 0) {
+              try {
+                const result = await borrowsAPI.borrow(currentUser!.id, tool.id, 1);
+                if (result.success) count++;
+              } catch { /* silencieux */ }
+            }
+          }
+          if (count > 0) {
+            showToast(`✅ ${count} emprunt${count > 1 ? 's' : ''} confirmé${count > 1 ? 's' : ''} !`, 'success', 3000);
+          } else {
+            showToast('❌ Erreur lors de l\'emprunt en masse', 'error', 3000);
+          }
+          await autoReturnBorrowedTools(detectedBorrowedInDrawer);
+          setDetectedBorrowedInDrawer([]);
+          resetValidation();
+          if (dId && ['1','2','3','4'].includes(dId)) {
+            setGuardDrawerId(dId);
+            setCurrentScreen('drawer-closing-guard');
+          } else {
+            setCurrentScreen('tool-selection');
+          }
+          loadBorrowsFromBackend().catch(() => {});
+          loadToolsFromBackend().catch(() => {});
+        }}
+        onBorrowedToolsFoundInDrawer={(toolNames) => setDetectedBorrowedInDrawer(toolNames)}
         onSkip={() => {
           const dId = selectedTool.drawer as '1'|'2'|'3'|'4' | null;
           resetValidation();
